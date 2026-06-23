@@ -9,21 +9,24 @@ Steps to set up the sim environment (user runs these themselves):
 
 ```bash
 # 1. Clone the sim repo into third_party/
-git clone https://github.com/NilsDengler/manipulation_enhanced_map_prediction third_party/shelf_gym_repo
+git clone --recurse-submodules -j8 https://github.com/NilsDengler/manipulation_enhanced_map_prediction third_party/shelf_gym_repo
 
 # 2. Gitignore it
 echo "third_party/" >> .gitignore
 
-# 3. Initialize uv project
-uv init --no-readme
+# 3. Initialize uv project (named)
+uv init --no-readme --name rob_env
 
-# 4. Add sim as editable local dep (enables intellisense, no sys.path hacks)
+# 4. Apply patch to fix setuptools multi-package discovery error
+git apply patches/shelf_gym_setup.patch --directory=third_party/shelf_gym_repo
+
+# 5. Add sim as editable local dep (enables intellisense, no sys.path hacks)
 uv add --editable ./third_party/shelf_gym_repo
 
-# 5. Sync the environment
+# 6. Sync the environment
 uv sync
 
-# 6. Verify import works
+# 7. Verify import works
 uv run python -c "from shelf_gym.environments.shelf_environment import ShelfEnv; print('OK')"
 ```
 

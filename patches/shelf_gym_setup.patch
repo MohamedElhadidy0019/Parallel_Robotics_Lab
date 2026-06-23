@@ -1,0 +1,13 @@
+diff --git a/setup.py b/setup.py
+index cdf6a63..9ddbc04 100644
+--- a/setup.py
++++ b/setup.py
+@@ -1,6 +1,7 @@
+-from setuptools import setup
++from setuptools import setup, find_packages
+ 
+ setup(name='shelf_gym',
++      packages=find_packages(include=['shelf_gym', 'shelf_gym.*']),
+       version='0.0.3',
+       install_requires=['gymnasium', 'pybullet', "tqdm",  "h5py", "attrdict", "scipy", "scikit-image", "imutils",
+                         "opencv-python", "trimesh", "open3d", "tensorboard", "sb3-contrib", "stable_baselines3", "wandb",

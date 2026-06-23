@@ -1,0 +1,9 @@
+[project]
+name = "rob-env"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+exclude = ["third_party/*"]
