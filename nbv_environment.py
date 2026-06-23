@@ -125,16 +125,7 @@ class NBVEnv2(RobotEnv):
             ]
             self._p.createMultiBody(0, -1, sphere_vis, vp)
 
-        # Staging: in front of the object (robot side) and high up.
-        # Every move goes here first so the arm never swings through the object.
-        staging = np.array([self.obj_pos[0], self.obj_pos[1] - radius * 0.8, height + 0.4])
-        staging_ori = self._lookat_quaternion(staging, self.obj_pos)
-        staging_joints = self.get_ik_joints(staging.tolist(), staging_ori)
-        self.execute_joint_states(staging_joints, absolute=True)
-
-        for i, theta in enumerate(angles):
-            self.execute_joint_states(staging_joints, absolute=True)
-
+        def _move_to(theta, absolute=True):
             vp = np.array([
                 self.obj_pos[0] + radius * np.cos(theta),
                 self.obj_pos[1] + radius * np.sin(theta),
@@ -142,7 +133,26 @@ class NBVEnv2(RobotEnv):
             ])
             ori = self._lookat_quaternion(vp, self.obj_pos)
             joints = self.get_ik_joints(vp.tolist(), ori)
-            self.execute_joint_states(joints, absolute=True)
+            self.execute_joint_states(joints, absolute=absolute)
+            return vp
+
+        # theta=3pi/2 is directly in front of the object — closest to the arm's
+        # natural forward pose, so the first IK call lands in the right config.
+        MID = 3 * np.pi / 2
+        _move_to(MID, absolute=True)
+
+        # Glide from MID to the start of the arc (theta=pi, left side) with fine
+        # steps. absolute=False lets the arm flow continuously without stalling.
+        for t in np.linspace(MID, angles[0], num=16)[1:]:
+            _move_to(t, absolute=False)
+
+        for i, theta in enumerate(angles):
+            if i > 0:
+                # Fine arc steps between consecutive viewpoints — small increments
+                # keep the IK in the same configuration branch without seeding.
+                for t in np.linspace(angles[i - 1], theta, num=10)[1:-1]:
+                    _move_to(t, absolute=False)
+            vp = _move_to(theta, absolute=True)
 
             result = self.camera.get_cam_in_hand(
                 self.robot_id, self.camera_link,
@@ -162,7 +172,7 @@ class NBVEnv2(RobotEnv):
 if __name__ == "__main__":
     import time
     env = NBVEnv2(render=True)
-    time.sleep(5)
-    env.orbit_and_capture(n_views=8, height=1.2, save_dir="captures2")
+    time.sleep(2)
+    env.orbit_and_capture(n_views=8, height=1.2, save_dir="captures")
     while True:
         env.step_simulation(env.per_step_iterations)
