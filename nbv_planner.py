@@ -34,6 +34,17 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 REACHABILITY_CACHE_PATH = os.path.join(PROJECT_ROOT, "reachability", "reachability_cache.npz")
 
 N_SURFACE_SAMPLES = 5000
+BASE_EXCLUSION_HEIGHT_M = 0.015  # bottom 15mm of the object (world z) is excluded from the coverage
+                                  # denominator entirely - the table-contact face and its immediate
+                                  # transition curve, which no above-table camera can ever see (the object
+                                  # rests on an opaque table; this isn't a planner/reachability shortfall,
+                                  # it's a physical constraint of the scan setup - see project memory,
+                                  # user's own framing: "the TA meant 90-95% except the base, the base is
+                                  # occluded from the table"). Empirically verified: 15mm excludes 15.9% of
+                                  # surface samples (a plausible base-footprint size for a 192mm-tall
+                                  # bottle) and turns 83.5% raw coverage into 92.2% over the observable
+                                  # region - comfortably clears the 90% target that was previously unreachable
+                                  # by construction, not by insufficient scanning.
 COVERAGE_STOP_FRACTION = 0.925  # midpoint of the TA's 90-95% target range
 MIN_NEW_SCORE_TO_MOVE = 150     # a candidate offering fewer than this many newly-visible surface pts isn't worth a move -
                                  # also the loop's real terminator when the coverage target is physically unreachable (e.g.
@@ -66,14 +77,16 @@ class NBVPlanner:
         # coarse collision proxy on purpose - self-occlusion doesn't need fine surface detail to be roughly
         # right, and the detailed mesh has ~160x more triangles, which would blow up per-candidate
         # ray/triangle intersection cost during the actual scan (see nbv_core/coverage.py's module docstring).
-        mesh_world = load_object_mesh_world(np.array(t_obj_world), np.array(q_obj_world_xyzw))
+        self.mesh_world = load_object_mesh_world(np.array(t_obj_world), np.array(q_obj_world_xyzw))
         occluder_mesh_world = load_object_mesh_world(
             np.array(t_obj_world), np.array(q_obj_world_xyzw), mesh_path=MUSTARD_MESH_PATH_COARSE,
         )
         self.triangles_world = occluder_mesh_world.vertices[occluder_mesh_world.faces]
 
-        surface_points, surface_normals = sample_surface_points_and_normals(mesh_world, n_samples=N_SURFACE_SAMPLES)
-        self.coverage = CoverageTracker(surface_points, surface_normals)
+        surface_points, surface_normals = sample_surface_points_and_normals(self.mesh_world, n_samples=N_SURFACE_SAMPLES)
+        self.base_exclusion_z = float(self.mesh_world.vertices[:, 2].min()) + BASE_EXCLUSION_HEIGHT_M
+        is_observable = surface_points[:, 2] >= self.base_exclusion_z
+        self.coverage = CoverageTracker(surface_points[is_observable], surface_normals[is_observable])
         self._n_integrated_chunks = 0
 
     def select_next(self, accumulated_points_so_far: list[np.ndarray]) -> tuple[np.ndarray, list[float]] | None:
@@ -109,6 +122,26 @@ def get_coverage_fraction(env) -> float | None:
     """Current known-CAD coverage fraction for env's planner, or None if select_next_view_pose(env, ...) hasn't run yet."""
     planner = _PLANNERS.get(env)
     return planner.coverage.coverage_fraction() if planner is not None else None
+
+
+def get_coverage_tracker(env) -> "CoverageTracker | None":
+    """env's CoverageTracker (seen/unseen state over the known mesh's surface samples), or None if not started yet."""
+    planner = _PLANNERS.get(env)
+    return planner.coverage if planner is not None else None
+
+
+def get_base_exclusion_z(env) -> float | None:
+    """World z below which env's coverage tracker excludes the table-contact base entirely - see
+    BASE_EXCLUSION_HEIGHT_M. None if not started yet."""
+    planner = _PLANNERS.get(env)
+    return planner.base_exclusion_z if planner is not None else None
+
+
+def get_object_mesh_world(env):
+    """env's known-CAD mesh (trimesh.Trimesh, world frame) - the SAME instance used to build the coverage
+    tracker's surface samples, for building a coverage-colored visualization of it. None if not started yet."""
+    planner = _PLANNERS.get(env)
+    return planner.mesh_world if planner is not None else None
 
 
 def select_next_view_pose(

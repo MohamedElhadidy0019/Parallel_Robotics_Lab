@@ -189,3 +189,61 @@ class CoverageTracker:
 
     def get_seen_points(self) -> np.ndarray:
         return self.surface_points_world[self.seen]
+
+
+DEFAULT_SEEN_COLOR = (0.20, 0.75, 0.30)      # green
+DEFAULT_UNSEEN_COLOR = (0.65, 0.65, 0.65)    # gray
+DEFAULT_EXCLUDED_COLOR = (0.15, 0.15, 0.18)  # near-black - visually distinct from both: "not counted", not "not yet seen"
+
+
+def build_coverage_colored_mesh(
+    mesh_world: trimesh.Trimesh,
+    tracker: CoverageTracker,
+    base_exclusion_z: float | None = None,
+    seen_color: tuple[float, float, float] = DEFAULT_SEEN_COLOR,
+    unseen_color: tuple[float, float, float] = DEFAULT_UNSEEN_COLOR,
+    excluded_color: tuple[float, float, float] = DEFAULT_EXCLUDED_COLOR,
+):
+    """
+    The known true mesh, rendered as a solid surface colored by scan coverage - green where
+    CoverageTracker has confirmed real scan data landed nearby, gray where it hasn't, and (if
+    base_exclusion_z is given) near-black for the table-contact base region that's excluded from
+    the coverage denominator entirely - no above-table camera can ever see it, so it's not "not
+    yet seen," it's "physically impossible to see, doesn't count." The displayed geometry is
+    always the KNOWN, accurate mesh, never raw scanned points - this is the
+    CUDA_Lab_Assignments/Assignment04_startup reference pattern (its "reconstructed points" are
+    always known-grid voxels filtered by ray-cast visibility, never independently re-sensed data
+    - see Assignment04.cu, every "visible"/"reconstructed" point traces back to
+    object_grid.gridIndexToPoint(), the known ground truth, not a re-measured one) applied to
+    this project's continuous mesh instead of a discrete grid.
+
+    Every mesh VERTEX gets its own coverage color via nearest-neighbor lookup against the
+    tracker's own surface samples (reusing its existing KDTree) - this is a finer, complete
+    resolution than the tracker's own N_SURFACE_SAMPLES points (Step D/nbv_planner.py samples a
+    few thousand for scoring performance; the mesh itself typically has many more vertices),
+    giving a smooth, camera-ready colored surface instead of a sparse colored point cloud. Base
+    vertices are colored directly by height, NOT by nearest-neighbor against the tracker (which
+    no longer holds any base samples at all once base_exclusion_z is used at tracker-build time
+    - nearest-neighbor would incorrectly attribute them to whichever nearby OBSERVABLE sample
+    happens to be closest instead of marking them excluded).
+
+    Requires open3d (imported here, not at module level, so nbv_core.coverage's other functions
+    - used inside the tight NBV planning loop - don't pay for importing it when this
+    visualization-only helper isn't used).
+    """
+    import open3d as o3d
+
+    vertices = mesh_world.vertices
+    _, nearest_idx = tracker._tree.query(vertices)
+    is_seen = tracker.seen[nearest_idx]
+    colors = np.where(is_seen[:, None], np.array(seen_color), np.array(unseen_color))
+    if base_exclusion_z is not None:
+        is_excluded = vertices[:, 2] < base_exclusion_z
+        colors = np.where(is_excluded[:, None], np.array(excluded_color), colors)
+
+    mesh_o3d = o3d.geometry.TriangleMesh()
+    mesh_o3d.vertices = o3d.utility.Vector3dVector(mesh_world.vertices)
+    mesh_o3d.triangles = o3d.utility.Vector3iVector(mesh_world.faces)
+    mesh_o3d.vertex_colors = o3d.utility.Vector3dVector(colors)
+    mesh_o3d.compute_vertex_normals()
+    return mesh_o3d

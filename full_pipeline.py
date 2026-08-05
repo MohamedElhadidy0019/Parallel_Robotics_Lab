@@ -30,8 +30,11 @@ import open3d as o3d
 
 from nbv_environment import NBVEnv2
 from nbv_core.camera_geometry import capture_rgb_and_depth, compute_intrinsics, backproject_depth, edge_discontinuity_mask
+from nbv_core.coverage import build_coverage_colored_mesh
 from nbv_core.motion_planning import move_camera_to
-from nbv_planner import get_coverage_fraction, select_next_view_pose
+from nbv_planner import (
+    get_base_exclusion_z, get_coverage_fraction, get_coverage_tracker, get_object_mesh_world, select_next_view_pose,
+)
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captures", "full_pipeline")
 EDGE_DISCONTINUITY_THRESHOLD_M = 0.02
@@ -123,6 +126,19 @@ def main() -> None:
     pose_path = os.path.join(OUTPUT_DIR, "object_pose.npz")
     np.savez(pose_path, t_obj_world=np.array(t_obj_world), q_obj_world=np.array(q_obj_world))
     print(f"Saved point cloud to {npy_path} and {ply_path}, object pose to {pose_path}")
+
+    # Additive, alongside the raw point cloud above (not a replacement) - the known true mesh,
+    # colored by which parts the scan actually confirmed seen. See project memory: this follows
+    # CUDA_Lab_Assignments/Assignment04_startup's own pattern of always displaying known-model
+    # geometry filtered by visibility, not independently re-sensed/re-registered points.
+    tracker = get_coverage_tracker(env)
+    mesh_world = get_object_mesh_world(env)
+    if tracker is not None and mesh_world is not None:
+        base_exclusion_z = get_base_exclusion_z(env)
+        coverage_mesh = build_coverage_colored_mesh(mesh_world, tracker, base_exclusion_z=base_exclusion_z)
+        coverage_mesh_path = os.path.join(OUTPUT_DIR, "coverage_visualization.ply")
+        o3d.io.write_triangle_mesh(coverage_mesh_path, coverage_mesh)
+        print(f"Saved coverage visualization (known mesh, green=seen/gray=unseen/black=excluded base) to {coverage_mesh_path}")
 
     if args.view:
         # PyBullet's EGL renderer (used for every depth capture above) and Open3D's
