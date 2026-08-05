@@ -18,7 +18,7 @@ class CapturedFrame(TypedDict):
     """What NBVEnv2.capture_frame() returns - declared here so `frame['...']`
     is known/autocompleted anywhere a captured frame gets passed around."""
     rgb: np.ndarray                # (H, W, 3) uint8
-    transformed_depth: np.ndarray  # (H, W) uint16, millimeters
+    transformed_depth: np.ndarray  # (H, W) float64, millimeters
     points_world: np.ndarray       # (N, 3), only points that passed all filters
     points_world_grid: np.ndarray  # (H, W, 3), unfiltered, one point per pixel
     valid_mask: np.ndarray         # (H, W) bool, range_valid_mask & edge_valid_mask
@@ -48,7 +48,7 @@ def capture_rgb_and_depth(
 
     Returns:
         rgb:      (H, W, 3) uint8
-        depth_mm: (H, W) uint16, real-world distance from the camera in millimeters
+        depth_mm: (H, W) float64, real-world distance from the camera in millimeters
         cam_pos:  (3,) camera world position
         cam_quat: (4,) camera world orientation quaternion
         body_ids: (H, W) int32, the PyBullet body unique ID visible at each
@@ -85,10 +85,18 @@ def capture_rgb_and_depth(
     # an OpenGL-normalized value in [0, 1], non-linear in true depth. This
     # formula undoes that non-linearity using only the near/far clip planes,
     # giving back real meters (then converted to millimeters for the rest
-    # of the pipeline).
+    # of the pipeline). Kept as float64, NOT rounded to whole millimeters -
+    # rounding here used to throw away real precision (the underlying OpenGL
+    # buffer has tens of thousands of distinct depth values per frame) and
+    # collapse it into a small number of ~1mm-spaced discrete shelves,
+    # visible as a real "terracing"/ribbing artifact on curved surfaces at
+    # oblique viewing angles, worst where many overlapping scan views
+    # stacked their own slightly-offset shelves on top of each other. See
+    # project memory for the full diagnosis (confirmed present in a single
+    # capture alone, not a multi-view registration issue).
     ogl_depth = np.array(ogl_depth)
     depth_m = (2.0 * near_m * far_m) / (far_m + near_m - (2.0 * ogl_depth - 1.0) * (far_m - near_m))
-    depth_mm = np.round(depth_m * 1000.0).astype(np.uint16)
+    depth_mm = depth_m * 1000.0
 
     # Step 4: decode the segmentation buffer down to plain body IDs. Each
     # entry is bodyUniqueId + ((linkIndex + 1) << 24) when something was hit,

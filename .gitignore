@@ -5,4 +5,4 @@ CUDA_Lab_Assignments/
 *.obj
 *.mtl
 *.ply
-
+*.npz

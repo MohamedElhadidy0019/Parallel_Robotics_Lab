@@ -18,6 +18,17 @@ ASSET_PATH = os.path.join(PROJECT_ROOT, "third_party/shelf_gym_repo/shelf_gym/me
 YCB_OBJECT = "YcbMustardBottle"
 
 TABLE_TOP_Z = 0.90  # matches robot base z; table half-height=0.45, center at z=0.45
+OBJECT_OFFSET_FROM_BASE_M = (0.28, 0.15)  # (x, y) offset from the robot BASE (not the gripper tip) to the
+                                           # object - close enough (radius ~0.32m) that a full-orbit reachability
+                                           # shell around the object stays within the UR5's ~0.85m max reach even
+                                           # on the far side (see project memory: the original gripper-tip-relative
+                                           # placement put the object ~0.6m from the base, so far-side scan
+                                           # candidates ended up 1.0-1.3m out - unreachable at any azimuth).
+                                           # Offset sideways (not straight along the gripper's own rest-pose y-axis
+                                           # line) so the dropped object clears the arm's own resting body instead
+                                           # of landing on top of it - a straight-line-closer placement was tried
+                                           # first and the object settled resting on the gripper (z=1.095 instead
+                                           # of ~0.97), confirming the direct overlap.
 
 
 class NBVEnv2(RobotEnv):
@@ -79,12 +90,22 @@ class NBVEnv2(RobotEnv):
             self._p.createMultiBody(0, -1, lv, lp)
 
     def _place_object(self) -> None:
-        # init_pos is the tool_tip world position at the robot's rest pose (set by super().__init__)
-        obj_x = self.init_pos[0]
-        obj_y = self.init_pos[1] + 0.10  # 10 cm in front of the gripper tip
+        # Placed relative to the robot BASE (not the gripper tip, unlike the original version) - reachability
+        # depends on distance from the base, not from wherever the gripper happens to rest. Same +y "front"
+        # direction as the robot's natural rest pose (init_pos), just pulled in closer - see
+        # OBJECT_DISTANCE_FROM_BASE_M's docstring.
+        base_pos, _ = self._p.getBasePositionAndOrientation(self.robot_id)
+        obj_x = base_pos[0] + OBJECT_OFFSET_FROM_BASE_M[0]
+        obj_y = base_pos[1] + OBJECT_OFFSET_FROM_BASE_M[1]
         obj_z = TABLE_TOP_Z + 0.15       # drop from slightly above the table surface
 
-        obj_path = os.path.join(ASSET_PATH, f"ycb_objects/{YCB_OBJECT}/model_textureless.urdf")
+        # model.urdf (not model_textureless.urdf) - real scanned textured_simple_reoriented.obj mesh
+        # for VISUAL (what the depth camera actually renders/captures), collision_vhacd.obj kept for
+        # COLLISION (cheap convex-hull physics proxy, unchanged - same drop/settle/contact behavior as
+        # before). model_textureless.urdf used the coarse collision proxy for both, which is why every
+        # earlier reconstruction looked visibly rounder/more faceted than the real bottle - see project
+        # memory.
+        obj_path = os.path.join(ASSET_PATH, f"ycb_objects/{YCB_OBJECT}/model.urdf")
         self.obj_id = self._p.loadURDF(
             obj_path, [obj_x, obj_y, obj_z],
             self._p.getQuaternionFromEuler([0, 0, 0])

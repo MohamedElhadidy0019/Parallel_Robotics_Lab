@@ -1,7 +1,6 @@
 """
 Compares the saved mustard-bottle point cloud against the object's actual
-ground-truth mesh (collision_vhacd.obj - the same coarse mesh PyBullet
-renders and collides with, NOT the finer YCB scan mesh - see note below) to
+ground-truth mesh (textured_simple_reoriented.obj, the real YCB scan) to
 get a real, ground-truth-backed accuracy number instead of just eyeballing
 plots for coherence.
 
@@ -18,12 +17,15 @@ frame the point cloud is already in. Then for every scanned point we ask
 distance, via Open3D's RaycastingScene) - a direct per-point accuracy
 number, not just a visual coherence check.
 
-Note on mesh choice: model_textureless.urdf's <visual> AND <collision> both
-point at collision_vhacd.obj (a coarse ~90-triangle convex-decomposition
-proxy) - that's the literal shape PyBullet rendered to produce our depth
-images, so it's the internally-consistent ground truth here, even though
-it's coarser than the original YCB scan mesh. Expect a small baseline error
-from its own faceting, not just reconstruction noise.
+Note on mesh choice: nbv_environment.py loads model.urdf, whose <visual>
+points at textured_simple_reoriented.obj (the real ~15.7k-triangle YCB
+scan) - that's the literal shape PyBullet now renders to produce our depth
+images, so it's the internally-consistent ground truth here. (Earlier,
+model_textureless.urdf used the coarse ~98-triangle collision_vhacd.obj
+convex-decomposition proxy for both visual and collision, which is why
+every reconstruction before this looked visibly rounder/more faceted than
+the real bottle - see project memory. collision_vhacd.obj is still used for
+COLLISION physics in model.urdf, unchanged.)
 
 Requires scan_and_save_mustard_only.py to have been run first (reads its
 saved pointcloud_mustard_*.npy and object_pose.npz).
@@ -51,12 +53,15 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.path.join(PROJECT_ROOT, "captures", "scan_and_save_mustard_only")
 MESH_PATH = os.path.join(
     PROJECT_ROOT,
-    "third_party/shelf_gym_repo/shelf_gym/meshes/urdf/ycb_objects/YcbMustardBottle/collision_vhacd.obj",
+    "third_party/shelf_gym_repo/shelf_gym/meshes/urdf/ycb_objects/YcbMustardBottle/textured_simple_reoriented.obj",
 )
-# From model_textureless.urdf's <visual>/<collision> <origin rpy="0 0 1.57">.
+# From model.urdf's <visual>/<collision> <origin rpy="0 0 1.57"> (nbv_environment.py now loads model.urdf,
+# not model_textureless.urdf, so the depth camera renders this detailed scanned mesh - not the coarse
+# collision_vhacd.obj convex-decomposition proxy this script used to compare against; same origin offset
+# applies to both, see nbv_core/coverage.py's module docstring for the full story).
 R_MESH_BASELINK = np.array(pb.getMatrixFromQuaternion(pb.getQuaternionFromEuler([0, 0, 1.57]))).reshape(3, 3)
 
-# model_textureless.urdf's <inertial><origin rpy="0 0 0.1" xyz="0.005 0.005 -0.015"/> is
+# model.urdf's <inertial><origin rpy="0 0 0.1" xyz="0.005 0.005 -0.015"/> is
 # NOT zero. PyBullet's getBasePositionAndOrientation() returns the pose of the link's
 # INERTIAL frame, not the URDF link/visual origin - a well-known pybullet gotcha for any
 # body whose <inertial><origin> differs from identity. Composing t_obj_world/q_obj_world
@@ -108,13 +113,13 @@ def load_ground_truth_mesh_world() -> o3d.geometry.TriangleMesh:
     R_baselink_world = R_inertial_world @ R_LINK_INERTIAL.T
     t_obj_world = R_inertial_world @ (-R_LINK_INERTIAL.T @ T_LINK_INERTIAL) + t_obj_world
 
-    # collision_vhacd.obj is a VHACD convex decomposition: 4 separate hull
-    # pieces, 3 of which are non-triangular faces (1 quad + 2 pentagons).
-    # Open3D's read_triangle_mesh silently DROPS non-triangle faces instead
-    # of triangulating them ("Skipping non-triangle primitive geometry"),
-    # leaving real holes in the ground truth and producing a spurious
-    # systematic offset in the distance comparison. trimesh triangulates
-    # n-gons instead of dropping them (98 faces recovered vs Open3D's 90).
+    # trimesh.load (not Open3D's read_triangle_mesh) on purpose - Open3D silently DROPS
+    # non-triangle faces instead of triangulating them ("Skipping non-triangle primitive
+    # geometry"), which mattered a lot for the old collision_vhacd.obj ground truth (a VHACD
+    # convex decomposition with 3 non-triangular hull faces, leaving real holes and a spurious
+    # systematic offset if loaded via Open3D). textured_simple_reoriented.obj is already a
+    # proper triangulated scan mesh so this doesn't bite the same way here, but trimesh is the
+    # safer/consistent choice either way.
     tm = trimesh.load(MESH_PATH, process=False)
     if isinstance(tm, trimesh.Scene):
         tm = trimesh.util.concatenate(list(tm.geometry.values()))
