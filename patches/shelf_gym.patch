@@ -52,10 +52,10 @@ index efdfaf9..26b63cc 100644
 -PyOpenGL
 +#PyOpenGL          # not needed
 diff --git a/setup.py b/setup.py
-index cdf6a63..9ddbc04 100644
+index cdf6a63..2427b51 100644
 --- a/setup.py
 +++ b/setup.py
-@@ -1,6 +1,7 @@
+@@ -1,9 +1,10 @@
 -from setuptools import setup
 +from setuptools import setup, find_packages
  
@@ -63,7 +63,11 @@ index cdf6a63..9ddbc04 100644
 +      packages=find_packages(include=['shelf_gym', 'shelf_gym.*']),
        version='0.0.3',
        install_requires=['gymnasium', 'pybullet', "tqdm",  "h5py", "attrdict", "scipy", "scikit-image", "imutils",
-                         "opencv-python", "trimesh", "open3d", "tensorboard", "sb3-contrib", "stable_baselines3", "wandb",
+-                        "opencv-python", "trimesh", "open3d", "tensorboard", "sb3-contrib", "stable_baselines3", "wandb",
++                        "opencv-python", "trimesh", "open3d", 
+                         "shapely==2.0.4", "voxelmap", "toppra", "seaborn","klampt","PyMCubes","pyfqmr", "cupy-cuda12x", "lightning", "PyOpenGL", "hdf5plugin", "torchvision", ]
+ )
+  
 diff --git a/shelf_gym/environments/shelf_environment.py b/shelf_gym/environments/shelf_environment.py
 index 3a5800c..5666cfc 100644
 --- a/shelf_gym/environments/shelf_environment.py
@@ -77,3 +81,9 @@ index 3a5800c..5666cfc 100644
      while True:
          env.step_simulation(env.per_step_iterations)
 \ No newline at end of file
+diff --git a/shelf_gym/utils/scikit-geometry b/shelf_gym/utils/scikit-geometry
+--- a/shelf_gym/utils/scikit-geometry
++++ b/shelf_gym/utils/scikit-geometry
+@@ -1 +1 @@
+-Subproject commit e4a25c0cde054a3a4bd6b21d3ca30db8e7e6a178
++Subproject commit e4a25c0cde054a3a4bd6b21d3ca30db8e7e6a178-dirty
