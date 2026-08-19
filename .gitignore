@@ -1,28 +1,8 @@
-# Byte-compiled / optimized / build artifacts
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-build/
-dist/
-*.so
-
-# Environment & local paths
-env.sh
-.venv/
-
-# Test & tooling caches
-.pytest_cache/
-.coverage
-
-# 3D assets, point clouds, and binary data
-captures/
+CUDA_Lab_Assignments/
+*.png
+*.pyc
 *.npy
-*.npz
-*.ply
 *.obj
 *.mtl
-*.png
-
-# Submodule / assignments
-CUDA_Lab_Assignments/
+*.ply
+*.npz
