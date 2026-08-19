@@ -1,9 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "rob-env"
+name = "nbv-pipeline"
 version = "0.1.0"
-description = "Add your description here"
+description = "Autonomous Next-Best-View 3D scanning pipeline for robot manipulators"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nbv_core*"]
 
 [tool.uv.workspace]
 exclude = ["third_party/*"]
