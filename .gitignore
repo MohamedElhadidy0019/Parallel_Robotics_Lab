@@ -6,3 +6,5 @@ CUDA_Lab_Assignments/
 *.mtl
 *.ply
 *.npz
+captures/
+uv.lock
