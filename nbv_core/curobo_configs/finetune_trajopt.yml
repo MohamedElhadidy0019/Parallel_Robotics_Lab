@@ -1,3 +1,9 @@
+# finetune_trajopt.yml — refinement-stage trajectory optimizer tolerances.
+#
+# Copied from CuRobo's stock config at:
+#   third_party/curobo_legacy_rob_env/src/curobo/content/configs/task/finetune_trajopt.yml
+#
+# Changed for this project: use_cuda_*_kernel → false  (Pascal GPU crash)
 cost:
   bound_cfg:
     activation_distance:

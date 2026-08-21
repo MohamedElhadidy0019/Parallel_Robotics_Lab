@@ -21,17 +21,12 @@ from nbv_core.config import (
 
 
 def cache_path_for(ycb_object: str) -> str:
-    """Where this object's cache lives. One file per object -- candidates are built around
-    its position and its size, so nothing carries over between them."""
+    """Path to the reachability cache for one object."""
     return os.path.join(CACHE_DIR, f"reachability_{ycb_object}.npz")
 
 
 def camera_lookat_quaternion_xyzw(eye: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """Orientation of a camera at `eye` pointing at `target`, as an xyzw quaternion.
-
-    Optical convention, matching nbv_core.camera: +Z forward (down the view direction),
-    +X right, +Y down. Falls back to a different world-up when the view direction is
-    near-vertical"""
+    """Camera at `eye` pointing at `target`, as an xyzw quaternion (+X right, +Y down, +Z forward)."""
     from scipy.spatial.transform import Rotation
 
     z_axis = target - eye
@@ -56,13 +51,12 @@ def sample_candidate_camera_poses(
     n_azimuth: int = N_AZIMUTH,
     z_min_world: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Hemisphere shell of camera poses around the object, each looking at its center.
+    """Viewpoints on a hemisphere shell around the object, each looking at its centre.
 
-    radius and elevation_deg are (min, max, count). Azimuth always sweeps a full 2*pi --
-    the IK filter rejects the unreachable far side on its own. z_min_world drops candidates
-    below a known obstacle plane, e.g. the tabletop.
+    radius / elevation_deg are (min, max, count). z_min_world drops candidates under a
+    known obstacle (tabletop). Azimuth sweeps a full 2π.
 
-    Returns (t_candidates_world (N, 3), q_candidates_world_xyzw (N, 4)).
+    Returns (positions (N,3), quaternions xyzw (N,4)).
     """
     radii = np.linspace(radius[0], radius[1], radius[2])
     phis = np.radians(np.linspace(elevation_deg[0], elevation_deg[1], elevation_deg[2]))
@@ -89,12 +83,7 @@ def world_poses_to_base_link_frame(
     t_base_world: np.ndarray,
     q_base_world_xyzw: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Re-express world-frame poses relative to the robot's base_link, which is the frame
-    CuRobo solves IK in.
-
-        t_base = R_base^-1 @ (t_world - t_base_world)
-        q_base = R_base^-1 * q_world
-    """
+    """Re-express world-frame poses in the base_link frame that CuRobo solves IK in."""
     from scipy.spatial.transform import Rotation
 
     R_base = Rotation.from_quat(q_base_world_xyzw)
@@ -118,10 +107,7 @@ def ik_filter(
     rotation_threshold: float = IK_ROTATION_THRESHOLD_RAD,
     num_seeds: int = IK_NUM_SEEDS,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Which candidates the arm can reach, and the joint angles that get it there.
-
-    Returns (reachable (N,) bool, q_joints (N, 6)), zeroed where unreachable.
-    """
+    """Which candidates the arm can IK to. Returns (reachable (N,), q_joints (N,6)), zeroed where not."""
     import torch
     from curobo.types.base import TensorDeviceType
     from curobo.types.math import Pose
@@ -173,7 +159,7 @@ def save_cache(
     base_link: str,
     ee_link: str,
 ) -> None:
-    """Write one object's cache. Poses stay in world frame -- base_link was only for the IK."""
+    """Write one object's cache. Poses stay in world frame."""
     np.savez(
         cache_path,
         t_candidates_world=t_candidates_world.astype(np.float32),
@@ -187,16 +173,14 @@ def save_cache(
 
 
 def load_reachability_cache(cache_path: str) -> dict:
+    """Load a pre-computed reachability cache."""
     data = np.load(cache_path, allow_pickle=False)
     return {key: data[key] for key in data.files}
 
 
 def build_cache_for_object(ycb_object: str | None = None) -> str:
-    """Spin up the sim for one object, sample a shell around it, IK-filter, save.
-
-    Returns the cache path written.
-    """
-    # Deferred so the rest of this module stays importable without a sim or a GPU.
+    """Build a reachability cache for one object. Returns the path written."""
+    # Deferred — the rest of this module is importable without a sim or GPU.
     from nbv_core.sim_env import ASSET_PATH, DEFAULT_YCB_OBJECT, SimEnv
 
     ycb_object = ycb_object or DEFAULT_YCB_OBJECT

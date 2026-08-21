@@ -1,4 +1,4 @@
-"""UR5 + table + target object. Sizes itself from whatever is loaded."""
+"""UR5 + table + YCB object scene."""
 
 import os
 
@@ -19,9 +19,7 @@ from nbv_core.config import (
 
 def ycb_urdf(name: str) -> str:
     """Path to a vendored YCB object's urdf."""
-    # model.urdf renders the detailed scanned mesh; model_textureless renders the coarse
-    # collision hull instead, which the depth camera would then see.
-    return os.path.join(YCB_ROOT, name, "model.urdf")
+    return os.path.join(YCB_ROOT, name, "model.urdf")  # not model_textureless: the depth camera must see the real mesh
 
 
 def ycb_names() -> list:
@@ -157,8 +155,8 @@ class SimEnv(RobotEnv):
                 break
 
     def _place_object(self) -> None:
-        """Drop the object, stand it at its computed spot, and record where it ended up."""
-        # Dropped somewhere provisional first: _placement_xy needs the settled footprint.
+        """Drop the object at its computed spot. Records obj_pos after settling."""
+        # Temporary spot first: _placement_xy needs the settled AABB.
         bx, by = self.base_pose()[0][:2]
         self.obj_id = self._p.loadURDF(
             ycb_urdf(self.ycb_object), [bx, by + 0.3, self.table_top_z + 0.15]
@@ -188,7 +186,7 @@ class SimEnv(RobotEnv):
             self.step_simulation(self.per_step_iterations)
 
     def _snap_to_joint_targets(self, joint_targets: list[float]) -> None:
-        """Teleport to the plan endpoint -- position control has steady-state droop."""
+        """Teleport the arm to the planned endpoint. Position control has steady-state error."""
         for i, target in zip(self.arm_joint_indices, joint_targets):
             self._p.resetJointState(self.robot_id, i, float(target), physicsClientId=self.client_id)
 

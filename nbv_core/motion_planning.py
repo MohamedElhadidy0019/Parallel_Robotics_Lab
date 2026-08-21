@@ -30,7 +30,7 @@ def _build_robot_config(tensor_args):
 
 
 def _get_motion_gen(env):
-    """Build MotionGen once and reuse it; world obstacles are refreshed per move."""
+    """Build MotionGen once and reuse across the process."""
     global _MOTION_GEN
     if _MOTION_GEN is None:
         from curobo.geom.sdf.world import CollisionCheckerType
@@ -55,7 +55,7 @@ def _get_motion_gen(env):
 
 
 def _build_world_config(env):
-    """Table + object as cuboids in the robot's base_link frame."""
+    """Table + object as cuboid obstacles in the base_link frame."""
     from curobo.geom.types import Cuboid, WorldConfig
 
     t_base_world, q_base_world_xyzw = env.base_pose()

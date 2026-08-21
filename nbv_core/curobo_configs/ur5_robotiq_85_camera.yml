@@ -1,23 +1,10 @@
-# CuRobo robot config for this project's actual URDF
-# (third_party/shelf_gym_repo/.../ur5_robotiq_85.urdf), used by nbv_core.motion_planning's
-# MotionGen setup - Step "collision-aware motion" of the NBV plan.
+# CuRobo robot config for ur5_robotiq_85.urdf
 #
-# Arm + gripper collision spheres below are copied verbatim from CuRobo's own shipped
-# ur5e_robotiq_2f_140.yml (src/curobo/content/configs/robot/ur5e_robotiq_2f_140.yml) - our
-# URDF's arm and gripper link names match that reference config exactly (confirmed by direct
-# inspection: shoulder_link/upper_arm_link/forearm_link/wrist_1..3_link/tool0 for the arm,
-# robotiq_arg2f_base_link/left_*/right_* for the gripper), so its per-link sphere geometry is
-# a reasonable approximation for our robot too - not hand-invented collision geometry, CuRobo's
-# own reference data for what is structurally the same arm+gripper family.
+# Collision spheres copied from CuRobo's own ur5e_robotiq_2f_140.yml at:
+#   third_party/curobo_legacy_rob_env/src/curobo/content/configs/robot/ur5e_robotiq_2f_140.yml
 #
-# The one link that reference config doesn't have is dummy_camera_link - our own addition,
-# a small box (0.042 x 0.042 x 0.023 m per the URDF) mounted rigidly on ee_link. Approximated
-# here with a single bounding sphere (radius ~half the box's diagonal).
-#
-# ee_link is set to dummy_camera_link (the pose this whole project plans around, not the
-# gripper) - same convention as the plain-IK path in nbv_core/reachability.py. finger_joint
-# (and its 5 mimicked followers) are locked at 0.0 - grasping is out of scope, gripper never
-# opens/closes, same lock_joints pattern the reference config itself uses.
+# Added: dummy_camera_link (bounding-sphere approx of the 42×42×23mm box on ee_link).
+# ee_link = dummy_camera_link, finger_joint locked at 0.0 (grasping out of scope).
 robot_cfg:
   kinematics:
     usd_path: null
