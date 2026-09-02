@@ -1,63 +1,157 @@
-# Next-Best-View (NBV) 3D Scan Pipeline
+# Autonomous Next-Best-View (NBV) 3D Scanning Pipeline
 
-Autonomous Next-Best-View (NBV) 3D scanning pipeline on a simulated UR5 arm with a Robotiq-85 gripper and wrist camera in PyBullet.
-
-Target: Plan collision-free camera trajectories around a target object, evaluate candidate viewpoints via GPU ray-casting against a CAD model, capture RGB-D depth frames, and iteratively reconstruct the surface.
+Autonomous Next-Best-View (NBV) 3D scanning system on a simulated UR5 robot arm with Robotiq-85 gripper and wrist-mounted RGB-D camera in PyBullet.
 
 ---
 
-## Environment Setup
+## 1. System Architecture Diagram
 
-Tested on NVIDIA GTX 10-series (Pascal sm_61) using CuRobo v0.7.8 and PyTorch 2.4.1 (CUDA 12.1).
+```
+ +-------------------------------------------------------------------------+
+ |                              OFFLINE ASSETS                             |
+ |  - YCB Object Visual CAD Mesh (.obj)                                    |
+ |  - URDF Model (Inertial COM + Visual Frame Offsets)                     |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |                      STAGE 1: SCENE & TARGET SETUP                      |
+ |  - PyBullet settles object on table                                     |
+ |  - Exact Mesh Transform: T_world_vis = T_world_ine * T_ine^-1 * T_vis   |
+ |  - Sample target surface points (table-contact base excluded)           |
+ |  - Initialize CPU CoverageTracker (scipy.spatial.cKDTree)               |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |                 STAGE 2: VIEWPOINT CANDIDATE GENERATION                 |
+ |  - Sample spherical orbit shell around object (radius, azimuth, elev)   |
+ |  - Compute Look-At quaternions aimed at object center                   |
+ |  - cuRobo Batched IK Filter: Prune kinematically unreachable poses      |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |             STAGE 3: CUSTOM CUDA RAY SCORING (PYTORCH EXT)              |
+ |  - Parallel GPU threads: M candidate views x N unseen target points     |
+ |  - Surface normal backface culling                                      |
+ |  - Moller-Trumbore ray-triangle intersection with early-exit occlusion  |
+ |  - Return expected information gain per viewpoint in < 250ms            |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |             STAGE 4: COLLISION-AWARE MOTION PLANNING (CUROBO)           |
+ |  - Sort candidate viewpoints by expected information gain               |
+ |  - cuRobo MotionGen optimizes collision-free trajectory past table      |
+ |  - Rank Fallback: If top candidate is blocked, try rank #2, #3, etc.    |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |                 STAGE 5: CAPTURE, BACKPROJECT & UPDATE                  |
+ |  - Render RGB-D depth buffer at achieved camera link pose               |
+ |  - Depth linearization + Edge discontinuity filtering                   |
+ |  - 2D Depth -> 3D World frame point cloud backprojection                |
+ |  - CPU KDTree confirms observed target surface points                   |
+ |  - Check stopping criteria: Target coverage reached (e.g. 95%)          |
+ +------------------------------------+------------------------------------+
+                                      |
+                                      v
+ +-------------------------------------------------------------------------+
+ |                    STAGE 6: EXPORT & VISUALIZATION                      |
+ |  - Save dense reconstructed point cloud (captures/scan_<object>.ply)    |
+ |  - Save color-coded coverage mesh (captures/coverage_<object>.ply)      |
+ |  - Interactive 3D visualization in Rerun or PyBullet GUI                |
+ +-------------------------------------------------------------------------+
+```
 
-### 1. Conda Environment
+---
+
+## 2. Core Modules Breakdown
+
+### 1. Scene & Physics (`nbv_core/sim_env.py`)
+* **Robot Setup:** UR5 6-DOF manipulator with Robotiq-85 gripper and wrist-mounted RealSense D435 camera.
+* **Objects:** 12 YCB benchmark objects placed on a tabletop workspace.
+* **Settling Physics:** Physics-steps object until linear and angular velocity fall below tolerance.
+* **Inertial vs Visual Frame Math:**
+  PyBullet `getBasePositionAndOrientation()` reports the Center-of-Mass (Inertial) frame. The visual CAD mesh is transformed into world coordinates via:
+  $$T_{\text{world\_vis}} = T_{\text{world\_inertial}} \cdot T_{\text{link\_inertial}}^{-1} \cdot T_{\text{link\_visual}}$$
+
+### 2. Candidate Generation & Kinematics (`nbv_core/reachability.py`)
+* **Orbit Shell:** Generates camera viewpoints across spherical shell radii, azimuths, and elevations above the tabletop plane.
+* **Camera Look-At:** Computes camera orientation targeting object centroid with positive Z camera optical axis.
+* **cuRobo Batched IK:** Parallel inverse kinematics solver filters candidate pool down to reachable poses before trajectory planning.
+
+### 3. Custom CUDA Ray Scoring Kernel (`nbv_core/csrc/` & `nbv_core/ray_scoring.py`)
+* **PyTorch C++/CUDA Extension:** JIT-compiled native kernel (`score_candidate_views_cuda`).
+* **Moller-Trumbore Algorithm:** Evaluates ray-triangle intersections against the object CAD mesh.
+* **Early-Exit Occlusion:** Thread terminates immediately upon the first blocking triangle hit.
+* **Backface Culling:** Ignores surface normals angled $> 90^\circ$ away from the camera optical axis.
+* **Performance:** Evaluates 200 viewpoints against 3,500 target points and 15,000 mesh triangles in $\sim 200 - 250\text{ms}$ on GTX 1650.
+
+### 4. Collision-Aware Motion Planning (`nbv_core/motion_planning.py`)
+* **cuRobo MotionGen:** GPU gradient trajectory optimizer with collision spheres avoiding the table slab and object bounding boxes.
+* **Rank-Fallback Execution:** If candidate #1 fails trajectory planning due to table collision constraints, candidate #2, #3, etc. are attempted automatically.
+
+### 5. Sensing & Coverage Tracking (`nbv_core/camera.py` & `nbv_core/coverage.py`)
+* **Depth Linearization:** Converts non-linear OpenGL depth buffer values to metric distance.
+* **Edge Masking:** Drops pixel boundary steps $> 2\text{cm}$ to avoid flying edge artifacts.
+* **Coverage Tracker:** CPU-based `scipy.spatial.cKDTree` matches reconstructed points to surface targets within 8mm radius and normal alignment $> 45^\circ$.
+* **Base Exclusion:** Bottom surface contact area ($z \le z_{\text{table}} + 3\text{mm}$) is excluded from coverage target denominator.
+
+---
+
+## 3. Quickstart Guide
+
+### Activate Environment
 
 ```bash
-conda create -n rob_env python=3.12 -y
-conda activate rob_env
-conda install -c conda-forge "cgal<6" ninja -y
-pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+source env.sh
 ```
 
-### 2. Submodules and Dependencies
+### Run Autonomous NBV Scan
 
 ```bash
-# shelf_gym (robot models and simulation base)
-git clone --recurse-submodules -j8 https://github.com/NilsDengler/manipulation_enhanced_map_prediction third_party/shelf_gym_repo
-git apply patches/shelf_gym.patch --directory=third_party/shelf_gym_repo
-cd third_party/shelf_gym_repo
-pip install "pybind11[global]==2.11.1"
-bash install.sh
-pip install -e . --no-build-isolation
-cd ../..
+# Headless run on Mustard Bottle (default 8 views)
+python main.py YcbMustardBottle --views 8
 
-# CuRobo v0.7.8 (kinematics and collision-aware motion planning)
-git clone --branch v0.7.8 https://github.com/nvlabs/curobo.git third_party/curobo_legacy_rob_env
-cd third_party/curobo_legacy_rob_env
-TORCH_CUDA_ARCH_LIST=6.1+PTX pip install -v -e . --no-build-isolation
-cd ../..
+# Run with PyBullet GUI to watch robot move live
+python main.py YcbMustardBottle --views 6 --gui
+
+# Run and automatically launch interactive Rerun 3D viewer
+python main.py YcbMustardBottle --views 6 --viz
+
+# Run across other YCB objects
+python main.py YcbChipsCan --views 8 --viz
+python main.py YcbGelatinBox --views 6 --viz
+python main.py YcbCrackerBox --views 8 --viz
 ```
 
 ---
 
-## Development Roadmap
+## 4. Viewing Scan Results
 
-The pipeline is being built modularly across the following stages:
+### Interactive 3D Viewer (`view_scan.py`)
 
-```
-Parallel_Robotics_Lab/
-├── nbv_core/
-│   ├── camera.py          # Stage 1: Intrinsics, 2D depth -> 3D point cloud backprojection
-│   ├── coverage.py        # Stage 2: Known-CAD mesh sampling, KD-Tree tracking, visualization
-│   ├── ray_scoring.py     # Stage 3: PyTorch GPU Möller-Trumbore ray casting & utility scoring
-│   └── motion_planner.py  # Stage 4: CuRobo reachability check & collision-aware trajectory
-├── sim_env.py             # PyBullet UR5 + Table + YCB Object environment
-└── main.py                # Stage 5: Closed-loop NBV scan execution loop
+```bash
+# View reconstructed point cloud in Rerun
+python view_scan.py captures/scan_YcbMustardBottle.ply
+
+# View coverage-colored mesh (Green = Seen, Gray = Unseen)
+python view_scan.py captures/coverage_YcbMustardBottle.ply
+
+# View in PyBullet OpenGL window instead of Rerun
+python view_scan.py captures/scan_YcbMustardBottle.ply --pb
 ```
 
 ---
 
-## Observations and Known Issues (from `main` branch)
+## 5. Test Suite
 
-- Merged raw point clouds exhibit minor multi-view registration ribbing due to arm settling precision residuals.
-- Table-contact base (~15mm) is physically unobservable from above-table camera orbits and is excluded from coverage evaluation.
+Run full test suite (39 unit and integration tests):
+
+```bash
+source env.sh
+pytest tests/ -v
+```
