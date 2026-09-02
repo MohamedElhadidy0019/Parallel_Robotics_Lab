@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from nbv_core.camera import backproject_depth, capture_rgbd, transform_points
 from nbv_core.config import (
+    BASE_EXCLUSION_HEIGHT_M,
     BASE_LINK,
     DEFAULT_YCB_OBJECT,
     EE_LINK,
@@ -102,7 +103,9 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
         env_temp = SimEnv(render=False, ycb_object=obj_name)
         pos, orn = env_temp._p.getBasePositionAndOrientation(env_temp.obj_id, physicsClientId=env_temp.client_id)
         mesh_t = transform_mesh(load_ycb_mesh(obj_name), np.array(pos), np.array(orn), obj_name=obj_name)
-        sample_surface_points_and_normals(mesh_t, n_samples=3600)
+        sample_surface_points_and_normals(
+            mesh_t, n_samples=3600, base_exclusion_z=env_temp.table_top_z + BASE_EXCLUSION_HEIGHT_M
+        )
         env_temp.close()
 
     mean_t, min_t, max_t = time_cpu(stage_setup, n_warmup=0, n_runs=max(1, min(runs, 3)))
@@ -114,7 +117,7 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
     mesh_world = transform_mesh(load_ycb_mesh(obj_name), np.array(pos), np.array(orn), obj_name=obj_name)
     triangles_world = np.asarray(mesh_world.vertices)[np.asarray(mesh_world.faces)]
     surface_pts, surface_nrm = sample_surface_points_and_normals(
-        mesh_world, n_samples=3600
+        mesh_world, n_samples=3600, base_exclusion_z=env.table_top_z + BASE_EXCLUSION_HEIGHT_M
     )
     tracker = CoverageTracker(surface_pts, surface_nrm)
 

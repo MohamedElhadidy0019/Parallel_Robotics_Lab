@@ -56,8 +56,9 @@ MAX_POSE_ERROR_M         = 0.015
 TABLE_CLEARANCE_M        = 0.12
 TABLE_COLLISION_HALF_HEIGHT = 0.15
 
-# -- Workspace filtering ------------------------------------------------------
+# -- Coverage target & base exclusion -----------------------------------------
 
+BASE_EXCLUSION_HEIGHT_M       = 0.015  # 15mm: bottom of object resting on table excluded from coverage denominator
 TABLE_CLEARANCE_MARGIN_M      = 0.003  # 3mm: drop depth points below/on table surface
 WORKSPACE_RADIUS_M            = 0.25   # 25cm: horizontal radius enclosing object inspection zone
 ROBOT_SELF_FILTER_MIN_DEPTH_M = 0.12   # 12cm: drop robot hand / gripper self-capture points
