@@ -109,12 +109,11 @@ def run_nbv_scan(
         mesh_world = transform_mesh(mesh, np.array(pos), np.array(orn), obj_name=obj_name)
         triangles_world = np.asarray(mesh_world.vertices[mesh_world.faces], dtype=np.float32)
 
-        base_exclusion_z = env.table_top_z + TABLE_CLEARANCE_MARGIN_M
         surface_pts, surface_nrm = sample_surface_points_and_normals(
-            mesh_world, n_samples=n_surface_samples, base_exclusion_z=base_exclusion_z
+            mesh_world, n_samples=n_surface_samples
         )
         tracker = CoverageTracker(surface_pts, surface_nrm)
-        print(f"      Target surface: {len(surface_pts)} samples (table contact base excluded)")
+        print(f"      Target surface: {len(surface_pts)} samples (full object)")
 
         visualizer = NBVVisualizer(obj_name, enabled=viz)
         visualizer.init_scene(env, mesh_world)
@@ -281,7 +280,7 @@ def run_nbv_scan(
             cloud_ply_path = os.path.join("captures", f"scan_{obj_name}.ply")
             _save_ply(cloud_ply_path, full_cloud)
 
-        cov_mesh_o3d = build_coverage_colored_mesh(mesh_world, tracker, base_exclusion_z=base_exclusion_z)
+        cov_mesh_o3d = build_coverage_colored_mesh(mesh_world, tracker)
         cov_mesh_path = os.path.join("captures", f"coverage_{obj_name}.ply")
         o3d.io.write_triangle_mesh(cov_mesh_path, cov_mesh_o3d)
 

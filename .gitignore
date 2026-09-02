@@ -8,3 +8,6 @@ CUDA_Lab_Assignments/
 *.npz
 captures/
 uv.lock
+build/
+nbv_core/csrc/build/
+*.so

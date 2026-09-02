@@ -18,7 +18,7 @@ Autonomous Next-Best-View (NBV) 3D scanning system on a simulated UR5 robot arm 
  |                      STAGE 1: SCENE & TARGET SETUP                      |
  |  - PyBullet settles object on table                                     |
  |  - Exact Mesh Transform: T_world_vis = T_world_ine * T_ine^-1 * T_vis   |
- |  - Sample target surface points (table-contact base excluded)           |
+ |  - Sample target surface points (full CAD mesh surface)                  |
  |  - Initialize CPU CoverageTracker (scipy.spatial.cKDTree)               |
  +------------------------------------+------------------------------------+
                                       |
@@ -98,7 +98,7 @@ Autonomous Next-Best-View (NBV) 3D scanning system on a simulated UR5 robot arm 
 * **Depth Linearization:** Converts non-linear OpenGL depth buffer values to metric distance.
 * **Edge Masking:** Drops pixel boundary steps $> 2\text{cm}$ to avoid flying edge artifacts.
 * **Coverage Tracker:** CPU-based `scipy.spatial.cKDTree` matches reconstructed points to surface targets within 8mm radius and normal alignment $> 45^\circ$.
-* **Base Exclusion:** Bottom surface contact area ($z \le z_{\text{table}} + 3\text{mm}$) is excluded from coverage target denominator.
+* **Target Surface:** Evaluates complete CAD mesh surface; points on the bottom contact area remain naturally occluded by the tabletop.
 
 ---
 
