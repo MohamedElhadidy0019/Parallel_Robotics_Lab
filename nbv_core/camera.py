@@ -68,6 +68,7 @@ def backproject_depth(
     depth_m: np.ndarray,
     intrinsics: CameraIntrinsics,
     rgb: Optional[np.ndarray] = None,
+    min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
     drop_edges: bool = True,
 ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
@@ -83,6 +84,8 @@ def backproject_depth(
     y = (v - intrinsics.cy) * z / intrinsics.fy
 
     valid = (z > 0) & np.isfinite(z)
+    if min_depth is not None:
+        valid &= z >= min_depth
     if max_depth is not None:
         valid &= z <= max_depth
     if drop_edges:

@@ -3,7 +3,7 @@
 # Collision spheres copied from CuRobo's own ur5e_robotiq_2f_140.yml at:
 #   third_party/curobo_legacy_rob_env/src/curobo/content/configs/robot/ur5e_robotiq_2f_140.yml
 #
-# Added: dummy_camera_link (bounding-sphere approx of the 42×42×23mm box on ee_link).
+# Added: dummy_camera_link (bounding-sphere approx of the 42x42x23mm box on ee_link).
 # ee_link = dummy_camera_link, finger_joint locked at 0.0 (grasping out of scope).
 robot_cfg:
   kinematics:

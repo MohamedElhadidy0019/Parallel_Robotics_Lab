@@ -1,9 +1,9 @@
-# gradient_trajopt.yml — first-pass trajectory optimizer tolerances.
+# gradient_trajopt.yml - first-pass trajectory optimizer tolerances.
 #
 # Copied from CuRobo's stock config at:
 #   third_party/curobo_legacy_rob_env/src/curobo/content/configs/task/gradient_trajopt.yml
 #
-# Changed for this project: use_cuda_*_kernel → false  (Pascal GPU crash)
+# Changed for this project: use_cuda_*_kernel -> false  (Pascal GPU crash)
 cost:
   bound_cfg:
     activation_distance:

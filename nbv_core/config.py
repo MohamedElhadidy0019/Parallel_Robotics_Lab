@@ -1,4 +1,4 @@
-"""Project constants — one place for every number and path the whole codebase shares."""
+"""Project constants: one place for every number and path the whole codebase shares."""
 
 import os
 import numpy as np
@@ -21,7 +21,7 @@ DEFAULT_YCB_OBJECT = "YcbMustardBottle"
 # -- Robot link names ---------------------------------------------------------
 
 BASE_LINK = "base_link"
-EE_LINK   = "dummy_camera_link"  # the camera, not the gripper — that's what we're placing
+EE_LINK   = "dummy_camera_link"  # the camera, not the gripper; that's what we're placing
 
 # -- Sampling grid ------------------------------------------------------------
 
@@ -56,10 +56,17 @@ MAX_POSE_ERROR_M         = 0.015
 TABLE_CLEARANCE_M        = 0.12
 TABLE_COLLISION_HALF_HEIGHT = 0.15
 
-# -- Camera intrinsics defaults -----------------------------------------------
+# -- Workspace filtering ------------------------------------------------------
+
+TABLE_CLEARANCE_MARGIN_M      = 0.003  # 3mm: drop depth points below/on table surface
+WORKSPACE_RADIUS_M            = 0.25   # 25cm: horizontal radius enclosing object inspection zone
+ROBOT_SELF_FILTER_MIN_DEPTH_M = 0.12   # 12cm: drop robot hand / gripper self-capture points
 
 DEFAULT_CAMERA_WIDTH  = 640
 DEFAULT_CAMERA_HEIGHT = 480
 DEFAULT_CAMERA_FOV    = 60.0
 DEFAULT_CAMERA_NEAR   = 0.05
 DEFAULT_CAMERA_FAR    = 2.0
+
+# OpenGL camera frame (X right, Y up, Z back) -> optical (X right, Y down, Z forward)
+T_OPENGL_OPTICAL = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)

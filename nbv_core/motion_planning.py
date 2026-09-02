@@ -1,6 +1,7 @@
 """Collision-aware arm motion to a target camera pose via CuRobo MotionGen."""
 
 import os
+import time
 
 import numpy as np
 
@@ -97,10 +98,13 @@ def _build_world_config(env):
     return WorldConfig(cuboid=[table, obj])
 
 
-def move_camera_to(env, t_target_world: np.ndarray, q_target_world) -> tuple[bool, np.ndarray]:
+def move_camera_to(
+    env, t_target_world: np.ndarray, q_target_world, visualizer=None, return_timing: bool = False
+) -> tuple:
     """Plan a collision-free trajectory to a camera pose and drive the arm along it.
 
-    Returns (reached, t_achieved_world).
+    If return_timing is False, returns (reached, t_achieved_world).
+    If return_timing is True, returns (reached, t_achieved_world, opt_ms, exec_ms).
     """
     from curobo.types.math import Pose
     from curobo.types.robot import JointState
@@ -132,25 +136,43 @@ def move_camera_to(env, t_target_world: np.ndarray, q_target_world) -> tuple[boo
         joint_names=env.arm_joint_names,
     )
 
-    result = motion_gen.plan_single(q_start, goal, MotionGenPlanConfig(max_attempts=5))
+    t_opt_0 = time.perf_counter()
+    result = motion_gen.plan_single(q_start, goal, MotionGenPlanConfig(max_attempts=15))
+    opt_ms = (time.perf_counter() - t_opt_0) * 1000.0
+
     if not bool(result.success.item()):
         t_now = np.array(
             env._p.getLinkState(env.robot_id, env.camera_link, physicsClientId=env.client_id)[0]
         )
+        if return_timing:
+            return False, t_now, opt_ms, 0.0
         return False, t_now
 
     plan = result.get_interpolated_plan()
     idx = [plan.joint_names.index(name) for name in env.arm_joint_names]
     trajectory = plan.position[:, idx].cpu().numpy()
 
+    t_exec_0 = time.perf_counter()
     for step in trajectory:
         env.execute_joint_states(step.tolist(), absolute=True)
+        if getattr(env, "render", False):
+            time.sleep(1.0 / 120.0)
+        if visualizer is not None and getattr(visualizer, "enabled", False):
+            visualizer.update_robot_pose(env)
+            if not getattr(env, "render", False):
+                time.sleep(1.0 / 120.0)
 
     env._wait_for_arm_at_rest()
     env._snap_to_joint_targets(trajectory[-1].tolist())
+    if visualizer is not None and getattr(visualizer, "enabled", False):
+        visualizer.update_robot_pose(env)
+    exec_ms = (time.perf_counter() - t_exec_0) * 1000.0
 
     t_achieved = np.array(
         env._p.getLinkState(env.robot_id, env.camera_link, physicsClientId=env.client_id)[0]
     )
     err = float(np.linalg.norm(t_achieved - np.asarray(t_target_world)))
-    return err <= MAX_POSE_ERROR_M, t_achieved
+    reached = err <= MAX_POSE_ERROR_M
+    if return_timing:
+        return reached, t_achieved, opt_ms, exec_ms
+    return reached, t_achieved

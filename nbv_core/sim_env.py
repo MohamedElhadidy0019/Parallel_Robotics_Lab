@@ -59,6 +59,14 @@ class SimEnv(RobotEnv):
         self._place_object()
         # shelf_gym turns rendering off to load and never turns it back on.
         self._p.configureDebugVisualizer(self._p.COV_ENABLE_RENDERING, 1)
+        if self.render:
+            self._p.resetDebugVisualizerCamera(
+                cameraDistance=1.2,
+                cameraYaw=50,
+                cameraPitch=-25,
+                cameraTargetPosition=[0.0, 0.4, 0.9],
+                physicsClientId=self.client_id,
+            )
 
     # --- measured ------------------------------------------------------------
 

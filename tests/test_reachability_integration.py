@@ -186,15 +186,15 @@ def show() -> None:
 
     for attempt, i in enumerate(order[:5]):
         targ = t[i]
-        p.addUserDebugText(f"→ {attempt+1}", targ.tolist(), [1, 1, 0], 1.2, physicsClientId=cid)
+        p.addUserDebugText(f"> {attempt+1}", targ.tolist(), [1, 1, 0], 1.2, physicsClientId=cid)
         ok, t_achieved = move_camera_to(env, targ, q[i].tolist())
         status = "REACHED" if ok else f"FAILED ({np.linalg.norm(t_achieved - targ):.3f}m)"
-        print(f"  {'✓' if ok else '✗'} candidate {attempt+1}: {status}")
+        print(f"  {'[PASS]' if ok else '[FAIL]'} candidate {attempt+1}: {status}")
         p.removeAllUserDebugItems(physicsClientId=cid)
         if ok:
             break
 
-    print("holding window — close it to end")
+    print("holding window: close it to end")
     while p.isConnected(cid):
         time.sleep(1 / 60)
     env.close()
