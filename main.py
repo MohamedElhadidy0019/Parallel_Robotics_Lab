@@ -43,7 +43,7 @@ from nbv_core.coverage import (
     sample_surface_points_and_normals,
     transform_mesh,
 )
-from nbv_core.motion_planning import move_camera_to
+from nbv_core.motion_planning import move_camera_to_batch
 from nbv_core.ray_scoring import score_candidate_views
 from nbv_core.reachability import ik_filter, sample_candidate_camera_poses
 from nbv_core.sim_env import SimEnv, ycb_names
@@ -117,6 +117,7 @@ def run_nbv_scan(
 
         visualizer = NBVVisualizer(obj_name, enabled=viz)
         visualizer.init_scene(env, mesh_world)
+        visualizer.update_setup_stage("Scene & Target Surface", "DONE", f"{len(surface_pts):,} samples (full mesh)")
 
         # [Stage 2/4] Kinematics & Candidate Filtering
         print("[2/4] Sampling orbit viewpoints & checking cuRobo reachability...")
@@ -128,10 +129,8 @@ def run_nbv_scan(
             z_min_world=env.table_top_z,
         )
         t_base, q_base = env.base_pose()
-        visualizer.log_execution_tree([
-            {"name": "Orbit Candidate Sampling", "cat": "CPU Host Processing", "status": "DONE", "ms": 42.0},
-            {"name": "cuRobo IK Reachability", "cat": "GPU Acceleration", "status": "RUNNING", "ms": 0.0},
-        ], title="Candidate Filtering Lifecycle")
+        visualizer.update_setup_stage("Orbit Viewpoints", "DONE", f"{len(t_cand)} generated")
+        visualizer.update_setup_stage("cuRobo IK Reachability", "RUNNING", "checking kinematics...")
 
         t0_ik = time.perf_counter()
         reachable, _ = ik_filter(
@@ -140,11 +139,7 @@ def run_nbv_scan(
         ik_ms = (time.perf_counter() - t0_ik) * 1000.0
         reach_idx = np.where(reachable)[0]
         print(f"      Candidates: {len(t_cand)} generated -> {len(reach_idx)} reachable by UR5")
-
-        visualizer.log_execution_tree([
-            {"name": "Orbit Candidate Sampling", "cat": "CPU Host Processing", "status": "DONE", "ms": 42.0},
-            {"name": "cuRobo IK Reachability", "cat": "GPU Acceleration", "status": "DONE", "ms": ik_ms},
-        ], title="Candidate Filtering Lifecycle")
+        visualizer.update_setup_stage("cuRobo IK Reachability", "DONE", f"{len(reach_idx)} reachable ({ik_ms:.0f} ms)")
 
         if len(reach_idx) == 0:
             print("Error: No reachable candidate viewpoints found.")
@@ -176,99 +171,92 @@ def run_nbv_scan(
 
             # Parallel GPU ray scoring
             cand_positions = t_cand[unvisited_reach]
-            stages_live = [
-                {"name": "CUDA Ray Scoring", "cat": "GPU Acceleration", "status": "RUNNING", "ms": 0.0},
-                {"name": "cuRobo Trajectory Opt", "cat": "GPU Acceleration", "status": "STANDBY", "ms": 0.0},
-                {"name": "Arm Waypoint Drive (120Hz)", "cat": "Simulation & Physical Motion", "status": "STANDBY", "ms": 0.0},
-                {"name": "RGB-D Camera Capture", "cat": "CPU Host Processing", "status": "STANDBY", "ms": 0.0},
-                {"name": "KDTree Coverage Match", "cat": "CPU Host Processing", "status": "STANDBY", "ms": 0.0},
-            ]
-            visualizer.log_execution_tree(stages_live, title=f"NBV Step #{views_executed + 1} Lifecycle")
+            # Parallel GPU ray scoring
+            cand_positions = t_cand[unvisited_reach]
+            visualizer.start_view(view_idx=views_executed + 1, max_views=max_views)
 
             t0 = time.perf_counter()
             scores, _ = score_candidate_views(
                 cand_positions, unseen_pts, unseen_nrm, triangles_world
             )
             score_ms = (time.perf_counter() - t0) * 1000.0
-            stages_live[0]["status"] = "DONE"
-            stages_live[0]["ms"] = score_ms
-            stages_live[1]["status"] = "RUNNING"
-            visualizer.log_execution_tree(stages_live, title=f"NBV Step #{views_executed + 1} Lifecycle")
+            visualizer.update_view_stage("CUDA Ray Scoring", "DONE", score_ms)
+            visualizer.update_view_stage("cuRobo Batch Opt", "RUNNING")
 
-            # Iterate through sorted candidate gains until a motion plan succeeds
+            # Take top K non-zero gain candidates for batched planning
             sorted_local = np.argsort(scores)[::-1]
-            view_succeeded = False
-
-            for local_idx in sorted_local:
-                cand_score = int(scores[local_idx])
-                if cand_score == 0:
-                    break
-
-                best_cand_idx = unvisited_reach[local_idx]
-                visited[best_cand_idx] = True
-
-                target_t = t_cand[best_cand_idx]
-                target_q = q_cand[best_cand_idx]
-                ok, t_achieved, opt_ms, exec_ms = move_camera_to(
-                    env, target_t, target_q.tolist(), visualizer=visualizer, return_timing=True
-                )
-                stages_live[1]["status"] = "DONE"
-                stages_live[1]["ms"] = opt_ms
-                stages_live[2]["status"] = "DONE"
-                stages_live[2]["ms"] = exec_ms
-                stages_live[3]["status"] = "RUNNING"
-                visualizer.log_execution_tree(stages_live, title=f"NBV Step #{views_executed + 1} Lifecycle")
-
-                if not ok:
-                    continue
-
-                t_cap_0 = time.perf_counter()
-                cloud, rgb, depth_m, view_matrix, t_cam = _capture_object_cloud(env)
-                cap_ms = (time.perf_counter() - t_cap_0) * 1000.0
-                stages_live[3]["status"] = "DONE"
-                stages_live[3]["ms"] = cap_ms
-                stages_live[4]["status"] = "RUNNING"
-                visualizer.log_execution_tree(stages_live, title=f"NBV Step #{views_executed + 1} Lifecycle")
-
-                if len(cloud) == 0:
-                    continue
-
-                t_cov_0 = time.perf_counter()
-                newly_seen = tracker.update(cloud)
-                cov_ms = (time.perf_counter() - t_cov_0) * 1000.0
-                stages_live[4]["status"] = "DONE"
-                stages_live[4]["ms"] = cov_ms
-                visualizer.log_execution_tree(stages_live, title=f"NBV Step #{views_executed + 1} Lifecycle")
-
-                accumulated_clouds.append(cloud)
-                executed_cams.append(t_achieved)
-                views_executed += 1
-                cov_now = tracker.coverage_fraction()
-
-                # Live streaming to Rerun
-                visualizer.log_step(
-                    step_idx=views_executed,
-                    cand_idx=best_cand_idx,
-                    gain=cand_score,
-                    newly_seen=newly_seen,
-                    score_ms=score_ms,
-                    view_matrix=view_matrix,
-                    intrinsics=env.intrinsics,
-                    tracker=tracker,
-                    new_cloud=cloud,
-                )
-
-                print(
-                    f"  [View {views_executed}/{max_views}] Cand #{best_cand_idx:03d} "
-                    f"(gain={cand_score:4d}) -> +{newly_seen:4d} seen | "
-                    f"Coverage: {cov_now * 100:4.1f}% | Scored in {score_ms:4.0f}ms"
-                )
-                view_succeeded = True
+            valid_sorted = [l for l in sorted_local if scores[l] > 0][:8]
+            if not valid_sorted:
+                print("      No remaining candidates with positive gain.")
                 break
 
-            if not view_succeeded:
-                print("      No remaining candidates reachable without collision.")
-                break
+            top_cand_indices = [unvisited_reach[l] for l in valid_sorted]
+            target_t = t_cand[top_cand_indices]
+            target_q = q_cand[top_cand_indices]
+
+            ok, t_achieved, best_k, opt_ms, exec_ms = move_camera_to_batch(
+                env, target_t, target_q, visualizer=visualizer, return_timing=True
+            )
+            visualizer.update_view_stage("cuRobo Batch Opt", "DONE", opt_ms)
+            visualizer.update_view_stage("Arm Waypoint Drive (120Hz)", "DONE", exec_ms)
+            visualizer.update_view_stage("RGB-D Camera Capture", "RUNNING")
+
+            # Mark evaluated candidates as visited
+            num_to_mark = best_k + 1 if ok else len(top_cand_indices)
+            for c_idx in top_cand_indices[:num_to_mark]:
+                visited[c_idx] = True
+
+            if not ok:
+                print("      Top batch candidates blocked by table collision, trying next candidates...")
+                continue
+
+            best_cand_idx = top_cand_indices[best_k]
+            cand_score = int(scores[valid_sorted[best_k]])
+
+            t_cap_0 = time.perf_counter()
+            cloud, rgb, depth_m, view_matrix, t_cam = _capture_object_cloud(env)
+            cap_ms = (time.perf_counter() - t_cap_0) * 1000.0
+            visualizer.update_view_stage("RGB-D Camera Capture", "DONE", cap_ms)
+            visualizer.update_view_stage("Coverage Matching", "RUNNING")
+
+            if len(cloud) == 0:
+                continue
+
+            t_cov_0 = time.perf_counter()
+            newly_seen = tracker.update(cloud)
+            cov_ms = (time.perf_counter() - t_cov_0) * 1000.0
+            visualizer.update_view_stage("Coverage Matching", "DONE", cov_ms)
+
+            accumulated_clouds.append(cloud)
+            executed_cams.append(t_achieved)
+            views_executed += 1
+            cov_now = tracker.coverage_fraction()
+
+            visualizer.complete_view(
+                cand_idx=best_cand_idx,
+                gain=cand_score,
+                newly_seen=newly_seen,
+                cov_pct=cov_now * 100.0,
+            )
+
+            # Live streaming to Rerun
+            visualizer.log_step(
+                step_idx=views_executed,
+                cand_idx=best_cand_idx,
+                gain=cand_score,
+                newly_seen=newly_seen,
+                score_ms=score_ms,
+                view_matrix=view_matrix,
+                intrinsics=env.intrinsics,
+                tracker=tracker,
+                new_cloud=cloud,
+            )
+
+            print(
+                f"  [View {views_executed}/{max_views}] Cand #{best_cand_idx:03d} "
+                f"(gain={cand_score:4d}) -> +{newly_seen:4d} seen | "
+                f"Coverage: {cov_now * 100:4.1f}% | Scored in {score_ms:4.0f}ms"
+            )
 
         # [Stage 4/4] Export Results
         os.makedirs("captures", exist_ok=True)

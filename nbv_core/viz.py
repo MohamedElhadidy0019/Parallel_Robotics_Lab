@@ -22,6 +22,16 @@ class NBVVisualizer:
         self.metrics_history: list[dict] = []
         self.robot_links_meta: list[tuple[int, tuple, tuple]] = []
 
+        self.setup_stages: list[dict] = [
+            {"name": "Scene & Target Surface", "status": "STANDBY", "info": ""},
+            {"name": "Orbit Viewpoints", "status": "STANDBY", "info": ""},
+            {"name": "cuRobo IK Reachability", "status": "STANDBY", "info": ""},
+        ]
+        self.completed_views: list[dict] = []
+        self.active_view: dict | None = None
+        self._last_telemetry_time: float = 0.0
+        self._cached_telemetry_str: str = ""
+
         if self.enabled:
             # Single-frame multi-pane layout:
             # Left: Large 3D World (top) + Live Stage Benchmark (bottom)
@@ -224,55 +234,158 @@ class NBVVisualizer:
 
         rr.log("metrics/hud", rr.TextDocument("\n".join(hud), media_type="text/markdown"))
 
-    def log_execution_tree(self, stages: list[dict], title: str = "Inspection Execution Tree") -> None:
-        """Log live pipeline execution tree using native Markdown formatting supported by Rerun."""
+    def update_setup_stage(self, name: str, status: str, info: str = "") -> None:
+        """Update scene or kinematics setup stage status in the execution tree."""
+        if not self.enabled:
+            return
+        for s in self.setup_stages:
+            if s["name"] == name:
+                s["status"] = status
+                s["info"] = info
+                break
+        else:
+            self.setup_stages.append({"name": name, "status": status, "info": info})
+        self._render_pipeline_tree()
+
+    def start_view(self, view_idx: int, max_views: int) -> None:
+        """Unfold a new scanning view in the execution tree."""
+        if not self.enabled:
+            return
+        self.active_view = {
+            "view_idx": view_idx,
+            "max_views": max_views,
+            "stages": [
+                {"name": "CUDA Ray Scoring", "status": "RUNNING", "ms": 0.0},
+                {"name": "cuRobo Batch Opt", "status": "STANDBY", "ms": 0.0},
+                {"name": "Arm Waypoint Drive (120Hz)", "status": "STANDBY", "ms": 0.0},
+                {"name": "RGB-D Camera Capture", "status": "STANDBY", "ms": 0.0},
+                {"name": "KDTree Coverage Match", "status": "STANDBY", "ms": 0.0},
+            ],
+            "summary": None,
+        }
+        self._render_pipeline_tree()
+
+    def update_view_stage(self, stage_name: str, status: str, ms: float = 0.0) -> None:
+        """Update an active view sub-stage status and latency."""
+        if not self.enabled or not self.active_view:
+            return
+        for s in self.active_view["stages"]:
+            if s["name"] == stage_name:
+                s["status"] = status
+                s["ms"] = ms
+                break
+        self._render_pipeline_tree()
+
+    def complete_view(self, cand_idx: int, gain: int, newly_seen: int, cov_pct: float) -> None:
+        """Finish active view, record metrics and timings, and persist in the tree."""
+        if not self.enabled or not self.active_view:
+            return
+        total_ms = sum(s["ms"] for s in self.active_view["stages"])
+        self.active_view["summary"] = {
+            "cand_idx": cand_idx,
+            "gain": gain,
+            "newly_seen": newly_seen,
+            "cov_pct": cov_pct,
+            "total_ms": total_ms,
+        }
+        self.completed_views.append(self.active_view)
+        self.active_view = None
+        self._render_pipeline_tree()
+
+    def _get_telemetry_str(self) -> str:
+        now = time.perf_counter()
+        if now - self._last_telemetry_time < 0.5 and self._cached_telemetry_str:
+            return self._cached_telemetry_str
+        self._last_telemetry_time = now
+        telemetry = ""
+        try:
+            import psutil
+            cpu = psutil.cpu_percent(interval=None)
+            vm = psutil.virtual_memory()
+            ram_used = (vm.total - vm.available) / (1024**3)
+            ram_tot = vm.total / (1024**3)
+            telemetry = f"`CPU: {cpu:.0f}%` | `RAM: {ram_used:.1f} / {ram_tot:.1f} GB`"
+        except Exception:
+            telemetry = "`CPU: -`"
+
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                text=True, timeout=0.08
+            ).strip().split(",")
+            if len(out) >= 3:
+                telemetry += f" | `GPU: {out[0].strip()}%` | `VRAM: {out[1].strip()} / {out[2].strip()} MB`"
+        except Exception:
+            pass
+
+        self._cached_telemetry_str = telemetry
+        return telemetry
+
+    def _render_pipeline_tree(self) -> None:
+        """Assemble and stream the unfolding execution tree to Rerun."""
         if not self.enabled:
             return
 
-        total_ms = sum(s.get("ms", 0.0) for s in stages if s.get("status") == "DONE")
-        lines = [
-            f"### {title}",
-            "",
-        ]
+        lines = ["### NBV Inspection Pipeline", ""]
 
-        categories = ["GPU Acceleration", "Simulation & Physical Motion", "CPU Host Processing"]
-        for cat in categories:
-            cat_stages = [s for s in stages if s.get("cat") == cat]
-            if not cat_stages:
-                continue
+        lines.append("**1. Scene & Kinematics Setup**")
+        for s in self.setup_stages:
+            status = s.get("status", "STANDBY")
+            if status == "DONE":
+                box = "- [x]"
+                tag = "`[DONE]`"
+            elif status == "RUNNING":
+                box = "- [ ]"
+                tag = "`[RUNNING]`"
+            else:
+                box = "- [ ]"
+                tag = "`[STANDBY]`"
+            info = f" : {s['info']}" if s.get("info") else ""
+            lines.append(f"{box} {tag} **{s['name']}**{info}")
 
-            cat_ms = sum(s.get("ms", 0.0) for s in cat_stages if s.get("status") == "DONE")
-            cat_pct = (cat_ms / total_ms * 100.0) if total_ms > 0 else 0.0
-            header_stat = f" [{cat_ms:6.1f} ms | {cat_pct:4.1f}%]" if total_ms > 0 and cat_ms > 0 else ""
-            lines.append(f"**{cat}**{header_stat}")
+        lines.append("")
+        lines.append("**2. Autonomous Scan Execution Tree**")
 
-            for s in cat_stages:
-                status = s.get("status", "STANDBY")
-                name = s.get("name", "")
-                ms = s.get("ms", 0.0)
-                pct = (ms / total_ms * 100.0) if total_ms > 0 and status == "DONE" else 0.0
+        if not self.completed_views and not self.active_view:
+            lines.append("- *Awaiting scan loop start...*")
 
+        for cv in self.completed_views:
+            sm = cv["summary"]
+            lines.append(
+                f"- [x] **View {cv['view_idx']}** : `Cand #{sm['cand_idx']:03d}` "
+                f"(+{sm['newly_seen']} seen | {sm['cov_pct']:.1f}% cov | {sm['total_ms']:.0f} ms)"
+            )
+            for st in cv["stages"]:
+                lines.append(f"  - `[DONE]` {st['name']} : `{st['ms']:6.1f} ms`")
+
+        if self.active_view:
+            lines.append(f"- [ ] **View {self.active_view['view_idx']}** : *in progress...*")
+            for st in self.active_view["stages"]:
+                status = st.get("status", "STANDBY")
                 if status == "RUNNING":
-                    box = "- [ ]"
-                    tag = "`[RUNNING]`"
-                    info = "*in progress...*"
+                    lines.append(f"  - [ ] `[RUNNING]` **{st['name']}** : *in progress...*")
                 elif status == "DONE":
-                    box = "- [x]"
-                    tag = "`[DONE]`"
-                    pct_str = f" ({pct:4.1f}%)" if total_ms > 0 else ""
-                    info = f"{ms:6.1f} ms{pct_str}"
+                    lines.append(f"  - [x] `[DONE]` **{st['name']}** : `{st['ms']:6.1f} ms`")
                 else:
-                    box = "- [ ]"
-                    tag = "`[STANDBY]`"
-                    info = "-"
+                    lines.append(f"  - [ ] `[STANDBY]` **{st['name']}** : -")
 
-                lines.append(f"{box} {tag} **{name}** : {info}")
-            lines.append("")
-
-        if total_ms > 0:
-            lines.append(f"**Decision Cycle Total:** `{total_ms:6.1f} ms`")
+        lines.append("")
+        lines.append("---")
+        lines.append("**System Telemetry**")
+        lines.append(self._get_telemetry_str())
 
         rr.log("benchmark", rr.TextDocument("\n".join(lines), media_type="text/markdown"))
+
+    def log_execution_tree(self, stages: list[dict], title: str = "NBV Inspection Pipeline") -> None:
+        """Backward-compatible wrapper: forwards stage updates to active view."""
+        if not self.enabled:
+            return
+        if self.active_view:
+            for s in stages:
+                self.update_view_stage(s.get("name", ""), s.get("status", "STANDBY"), s.get("ms", 0.0))
+        else:
+            self._render_pipeline_tree()
 
     def log_benchmark(self, timings: list[tuple[str, str, float]]) -> None:
         """Compatibility wrapper for simple flat timing lists."""
