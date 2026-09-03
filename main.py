@@ -13,6 +13,7 @@ import time
 import warnings
 import numpy as np
 import open3d as o3d
+import torch
 
 # Suppress noisy library warnings (gymnasium box precision, torch arch list)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -102,7 +103,7 @@ def run_nbv_scan(
     print(f"=== Autonomous NBV Scan: {obj_name} ===")
 
     # [Stage 1/4] Scene & Surface Setup
-    print("[1/4] Setting up PyBullet scene and target surface...")
+    t_start_scan = time.perf_counter()
     env = SimEnv(render=gui, ycb_object=obj_name)
     try:
         mesh = load_ycb_mesh(obj_name)
@@ -115,11 +116,11 @@ def run_nbv_scan(
             mesh_world, n_samples=n_surface_samples, base_exclusion_z=base_exclusion_z
         )
         tracker = CoverageTracker(surface_pts, surface_nrm)
-        print(f"      Target surface: {len(surface_pts)} samples (base excluded >{BASE_EXCLUSION_HEIGHT_M*1000:.0f}mm)")
 
         visualizer = NBVVisualizer(obj_name, enabled=viz)
         visualizer.init_scene(env, mesh_world)
-        visualizer.update_setup_stage("Scene & Target Surface", "DONE", f"{len(surface_pts):,} samples (>{BASE_EXCLUSION_HEIGHT_M*1000:.0f}mm base excluded)")
+        visualizer.update_setup_stage("Scene & Target Surface", "DONE", f"{len(surface_pts):,} samples (>15mm base excluded)")
+        print(f"      Target surface: {len(surface_pts)} samples (base excluded >{BASE_EXCLUSION_HEIGHT_M*1000:.0f}mm)")
 
         # [Stage 2/4] Kinematics & Candidate Filtering
         print("[2/4] Sampling orbit viewpoints & checking cuRobo reachability...")
@@ -140,7 +141,7 @@ def run_nbv_scan(
         )
         ik_ms = (time.perf_counter() - t0_ik) * 1000.0
         reach_idx = np.where(reachable)[0]
-        print(f"      Candidates: {len(t_cand)} generated -> {len(reach_idx)} reachable by UR5")
+        print(f"      Candidates: {len(t_cand)} generated -> {len(reach_idx)} reachable by UR5 ({ik_ms:.0f} ms)")
         visualizer.update_setup_stage("cuRobo IK Reachability", "DONE", f"{len(reach_idx)} reachable ({ik_ms:.0f} ms)")
 
         if len(reach_idx) == 0:
@@ -173,8 +174,6 @@ def run_nbv_scan(
 
             # Parallel GPU ray scoring
             cand_positions = t_cand[unvisited_reach]
-            # Parallel GPU ray scoring
-            cand_positions = t_cand[unvisited_reach]
             visualizer.start_view(view_idx=views_executed + 1, max_views=max_views)
 
             t0 = time.perf_counter()
@@ -185,9 +184,9 @@ def run_nbv_scan(
             visualizer.update_view_stage("CUDA Ray Scoring", "DONE", score_ms)
             visualizer.update_view_stage("cuRobo Batch Opt", "RUNNING")
 
-            # Take top K non-zero gain candidates for batched planning
+            # Take top K non-zero gain candidates for batched planning (cap at 4 for VRAM efficiency)
             sorted_local = np.argsort(scores)[::-1]
-            valid_sorted = [l for l in sorted_local if scores[l] > 0][:8]
+            valid_sorted = [l for l in sorted_local if scores[l] > 0][:4]
             if not valid_sorted:
                 print("      No remaining candidates with positive gain.")
                 break
@@ -219,7 +218,7 @@ def run_nbv_scan(
             cloud, rgb, depth_m, view_matrix, t_cam = _capture_object_cloud(env)
             cap_ms = (time.perf_counter() - t_cap_0) * 1000.0
             visualizer.update_view_stage("RGB-D Camera Capture", "DONE", cap_ms)
-            visualizer.update_view_stage("Coverage Matching", "RUNNING")
+            visualizer.update_view_stage("KDTree Coverage Match", "RUNNING")
 
             if len(cloud) == 0:
                 continue
@@ -227,7 +226,7 @@ def run_nbv_scan(
             t_cov_0 = time.perf_counter()
             newly_seen = tracker.update(cloud)
             cov_ms = (time.perf_counter() - t_cov_0) * 1000.0
-            visualizer.update_view_stage("Coverage Matching", "DONE", cov_ms)
+            visualizer.update_view_stage("KDTree Coverage Match", "DONE", cov_ms)
 
             accumulated_clouds.append(cloud)
             executed_cams.append(t_achieved)
@@ -241,7 +240,7 @@ def run_nbv_scan(
                 cov_pct=cov_now * 100.0,
             )
 
-            # Live streaming to Rerun
+            # Live streaming to Rerun (3D views, cameras, point cloud)
             visualizer.log_step(
                 step_idx=views_executed,
                 cand_idx=best_cand_idx,
@@ -259,6 +258,9 @@ def run_nbv_scan(
                 f"(gain={cand_score:4d}) -> +{newly_seen:4d} seen | "
                 f"Coverage: {cov_now * 100:4.1f}% | Scored in {score_ms:4.0f}ms"
             )
+
+            # Flush GPU cache between views to maintain clean VRAM headroom
+            torch.cuda.empty_cache()
 
         # [Stage 4/4] Export Results
         os.makedirs("captures", exist_ok=True)

@@ -33,23 +33,27 @@ class NBVVisualizer:
         self._cached_telemetry_str: str = ""
 
         if self.enabled:
-            # Single-frame multi-pane layout:
-            # Left: Large 3D World (top) + Live Stage Benchmark (bottom)
-            # Right: Reconstruction (top), Coverage (mid), Status HUD (bottom)
+            # Multi-tab layout:
+            # Tab 0: 3D Inspection (World, Robot, Reconstruction, Coverage, HUD)
+            # Tab 1: Pipeline Benchmark Tree (Unfolding execution tree & telemetry)
             blueprint = rrb.Blueprint(
-                rrb.Horizontal(
-                    rrb.Vertical(
+                rrb.Tabs(
+                    rrb.Horizontal(
                         rrb.Spatial3DView(name="Live 3D Environment (World & Robot)", contents=["+ /**"]),
-                        rrb.TextDocumentView(name="Live Stage Benchmark (CPU / GPU)", contents=["+ benchmark/**", "+ benchmark"]),
-                        row_shares=[3.5, 1.0],
+                        rrb.Vertical(
+                            rrb.Spatial3DView(name="Reconstruction", contents=["+ scene/**", "+ reconstruction/**"]),
+                            rrb.Spatial3DView(name="Coverage", contents=["+ scene/**", "+ coverage/**"]),
+                            rrb.TextDocumentView(name="Status HUD", contents=["+ metrics/hud/**"]),
+                            row_shares=[1.0, 1.0, 0.7],
+                        ),
+                        column_shares=[1.75, 1.0],
+                        name="3D Inspection",
                     ),
-                    rrb.Vertical(
-                        rrb.Spatial3DView(name="Reconstruction", contents=["+ scene/**", "+ reconstruction/**"]),
-                        rrb.Spatial3DView(name="Coverage", contents=["+ scene/**", "+ coverage/**"]),
-                        rrb.TextDocumentView(name="Status HUD", contents=["+ metrics/hud/**"]),
-                        row_shares=[1.0, 1.0, 0.7],
+                    rrb.TextDocumentView(
+                        name="Pipeline Benchmark Tree",
+                        contents=["+ benchmark/**", "+ benchmark"],
                     ),
-                    column_shares=[1.65, 1.0],
+                    active_tab=0,
                 ),
             )
             rr.init(f"nbv_scan_{obj_name}", spawn=True)
@@ -234,6 +238,7 @@ class NBVVisualizer:
 
         rr.log("metrics/hud", rr.TextDocument("\n".join(hud), media_type="text/markdown"))
 
+
     def update_setup_stage(self, name: str, status: str, info: str = "") -> None:
         """Update scene or kinematics setup stage status in the execution tree."""
         if not self.enabled:
@@ -372,8 +377,14 @@ class NBVVisualizer:
 
         lines.append("")
         lines.append("---")
-        lines.append("**System Telemetry**")
-        lines.append(self._get_telemetry_str())
+        # Coverage Progress Bar
+        bar_width = 30
+        last_cov = self.completed_views[-1]["summary"]["cov_pct"] if self.completed_views else 0.0
+        ratio = min(1.0, max(0.0, last_cov / 100.0))
+        filled = int(ratio * bar_width)
+        bar_str = "█" * filled + "░" * (bar_width - filled)
+        lines.append(f"**Coverage:** `[{bar_str}] {last_cov:5.1f}% / 95% target`")
+        lines.append(f"**Telemetry:** {self._get_telemetry_str()}")
 
         rr.log("benchmark", rr.TextDocument("\n".join(lines), media_type="text/markdown"))
 
