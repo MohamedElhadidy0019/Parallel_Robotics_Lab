@@ -103,34 +103,35 @@ DEFAULT_MAX_INCIDENCE_DEG = 75.0  # empirically tuned (see project memory): poin
                                    # quantization ever was
 
 
-def incidence_angle_mask(
-    points_world: np.ndarray,
-    cam_pos_world: np.ndarray,
-    surface_points_world: np.ndarray,
-    surface_normals_world: np.ndarray,
-    max_incidence_deg: float = DEFAULT_MAX_INCIDENCE_DEG,
-) -> np.ndarray:
-    """
-    True where a captured point was viewed from close enough to head-on relative to the KNOWN
-    true surface's local normal to be trustworthy; False at grazing/oblique incidence.
+#!NOT USED
+# def incidence_angle_mask(
+#     points_world: np.ndarray,
+#     cam_pos_world: np.ndarray,
+#     surface_points_world: np.ndarray,
+#     surface_normals_world: np.ndarray,
+#     max_incidence_deg: float = DEFAULT_MAX_INCIDENCE_DEG,
+# ) -> np.ndarray:
+#     """
+#     True where a captured point was viewed from close enough to head-on relative to the KNOWN
+#     true surface's local normal to be trustworthy; False at grazing/oblique incidence.
 
-    This is a capture-time quality filter, not a coverage/tracking concern - a standard technique
-    in real 3D scanning pipelines (real depth sensors are also noisiest at grazing incidence).
-    Uses the known-CAD mesh (already this project's core assumption elsewhere - coverage
-    tracking, ray-scoring) as ground truth for "which way does the real surface face here,"
-    independent of whichever direction the capturing camera happened to be looking from - the
-    same nearest-surface-sample lookup CoverageTracker.update() already does for its
-    normal-consistency check, just applied here to decide whether to keep a point at all rather
-    than whether it counts as "seen."
-    """
-    tree = cKDTree(surface_points_world)
-    _, nearest_idx = tree.query(points_world)
-    nearest_normal = surface_normals_world[nearest_idx]
+#     This is a capture-time quality filter, not a coverage/tracking concern - a standard technique
+#     in real 3D scanning pipelines (real depth sensors are also noisiest at grazing incidence).
+#     Uses the known-CAD mesh (already this project's core assumption elsewhere - coverage
+#     tracking, ray-scoring) as ground truth for "which way does the real surface face here,"
+#     independent of whichever direction the capturing camera happened to be looking from - the
+#     same nearest-surface-sample lookup CoverageTracker.update() already does for its
+#     normal-consistency check, just applied here to decide whether to keep a point at all rather
+#     than whether it counts as "seen."
+#     """
+#     tree = cKDTree(surface_points_world)
+#     _, nearest_idx = tree.query(points_world)
+#     nearest_normal = surface_normals_world[nearest_idx]
 
-    to_camera = cam_pos_world[None, :] - points_world
-    to_camera_dir = to_camera / np.maximum(np.linalg.norm(to_camera, axis=-1, keepdims=True), 1e-9)
-    cos_incidence = np.einsum("ij,ij->i", to_camera_dir, nearest_normal)
-    return cos_incidence > np.cos(np.radians(max_incidence_deg))
+#     to_camera = cam_pos_world[None, :] - points_world
+#     to_camera_dir = to_camera / np.maximum(np.linalg.norm(to_camera, axis=-1, keepdims=True), 1e-9)
+#     cos_incidence = np.einsum("ij,ij->i", to_camera_dir, nearest_normal)
+#     return cos_incidence > np.cos(np.radians(max_incidence_deg))
 
 
 class CoverageTracker:

@@ -165,7 +165,7 @@ def backproject_depth(
     return points_world
 
 
-def edge_discontinuity_mask(depth_m: np.ndarray, threshold_m: float = 0.02) -> np.ndarray:
+def edge_discontinuity_mask(depth_m: np.ndarray, threshold_m    : float = 0.02) -> np.ndarray:
     """
     True where a pixel's depth is consistent with its immediate neighbors,
     False at silhouette-edge pixels whose depth jumps sharply relative to

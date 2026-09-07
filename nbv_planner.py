@@ -158,5 +158,5 @@ def select_next_view_pose(
     """
     if env not in _PLANNERS:
         _PLANNERS[env] = NBVPlanner(env)
-    planner = _PLANNERS[env]
+    planner: NBVPlanner = _PLANNERS[env]
     return planner.select_next(accumulated_points_so_far)

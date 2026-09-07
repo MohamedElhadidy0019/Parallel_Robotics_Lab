@@ -1,0 +1,761 @@
+<title>NBV Scan Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #F5F7F5;
+    --surface: #FFFFFF;
+    --surface-2: #EDF1EE;
+    --line: #D8E0DB;
+    --ink: #16211D;
+    --ink-dim: #5C6E67;
+    --accent: #1E9A63;
+    --accent-ink: #FFFFFF;
+    --accent-tint: #E4F4EA;
+    --warn: #A66A14;
+    --warn-tint: #FBF0DE;
+    --excluded: #3A4A44;
+    --shadow: 0 1px 2px rgba(20,30,26,0.06), 0 8px 24px -12px rgba(20,30,26,0.12);
+    --radius: 10px;
+    --font-display: "Archivo", "Arial Narrow", sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0F1417;
+      --surface: #161D21;
+      --surface-2: #1B2226;
+      --line: #2A3339;
+      --ink: #E9EEEB;
+      --ink-dim: #8FA19A;
+      --accent: #3ECF8E;
+      --accent-ink: #06140D;
+      --accent-tint: #17281F;
+      --warn: #E0A83E;
+      --warn-tint: #2A2113;
+      --excluded: #C7CFCB;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px -16px rgba(0,0,0,0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0F1417;
+    --surface: #161D21;
+    --surface-2: #1B2226;
+    --line: #2A3339;
+    --ink: #E9EEEB;
+    --ink-dim: #8FA19A;
+    --accent: #3ECF8E;
+    --accent-ink: #06140D;
+    --accent-tint: #17281F;
+    --warn: #E0A83E;
+    --warn-tint: #2A2113;
+    --excluded: #C7CFCB;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 32px -16px rgba(0,0,0,0.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 28px 120px;
+  }
+
+  code, .mono { font-family: var(--font-mono); }
+
+  /* ---------- Theme toggle ---------- */
+  .theme-toggle {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 50;
+    display: flex;
+    gap: 2px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px;
+    box-shadow: var(--shadow);
+  }
+  .theme-toggle button {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    border: none;
+    background: transparent;
+    color: var(--ink-dim);
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .theme-toggle button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    padding: 76px 0 40px;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 18px;
+  }
+  .eyebrow .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: clamp(32px, 5vw, 46px);
+    line-height: 1.06;
+    letter-spacing: -0.015em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .hero p.lede {
+    max-width: 62ch;
+    font-size: 17.5px;
+    color: var(--ink-dim);
+    margin: 0 0 30px;
+  }
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(3, auto);
+    gap: 34px;
+    margin-bottom: 30px;
+  }
+  .stat .num {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 34px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .stat .label {
+    font-size: 12.5px;
+    color: var(--ink-dim);
+    margin-top: 6px;
+  }
+  .run-cmd {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    box-shadow: var(--shadow);
+  }
+  .run-cmd .prompt { color: var(--accent); }
+
+  /* ---------- Section scaffolding ---------- */
+  section { padding: 56px 0; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+  .section-head { margin-bottom: 28px; }
+  .section-kicker {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 8px;
+  }
+  h2 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 27px;
+    letter-spacing: -0.01em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+  .section-head p {
+    color: var(--ink-dim);
+    max-width: 66ch;
+    margin: 0;
+    font-size: 15.5px;
+  }
+
+  /* ---------- Stage rail (A-F) ---------- */
+  .stage-list { display: flex; flex-direction: column; gap: 14px; }
+  .stage {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .stage-letter {
+    font-family: var(--font-display);
+    font-weight: 800;
+    font-size: 22px;
+    color: var(--accent);
+    width: 44px; height: 44px;
+    border-radius: 9px;
+    background: var(--accent-tint);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .stage h3 {
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 16.5px;
+    margin: 2px 0 6px;
+  }
+  .stage p { margin: 0 0 10px; color: var(--ink-dim); font-size: 14.5px; }
+  .stage .files {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .filechip {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    padding: 3px 9px;
+    border-radius: 6px;
+  }
+
+  /* ---------- Loop diagram ---------- */
+  .loop {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: stretch;
+    gap: 0;
+    margin-bottom: 22px;
+  }
+  .loop-node {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .loop-node .tag {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+  .loop-node .fn {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 13.5px;
+    word-break: break-word;
+  }
+  .loop-node .desc { font-size: 13px; color: var(--ink-dim); }
+  .loop-arrow { display: flex; align-items: center; justify-content: center; padding: 0 6px; color: var(--ink-dim); }
+  .loop-repeat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--ink-dim);
+  }
+  .loop-repeat svg { flex-shrink: 0; }
+
+  @media (max-width: 700px) {
+    .loop { grid-template-columns: 1fr; }
+    .loop-arrow { transform: rotate(90deg); padding: 8px 0; }
+  }
+
+  /* ---------- Greedy step callout ---------- */
+  .greedy {
+    margin-top: 22px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+  }
+  .greedy h4 {
+    font-family: var(--font-display);
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    margin: 0 0 12px;
+  }
+  .greedy ol {
+    margin: 0; padding-left: 20px;
+    display: flex; flex-direction: column; gap: 7px;
+    font-size: 14px;
+  }
+  .greedy ol code { color: var(--accent); }
+
+  /* ---------- Visibility diagram ---------- */
+  .vis-grid {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 30px;
+    align-items: center;
+  }
+  .vis-diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 18px;
+  }
+  .vis-diagram svg { width: 100%; height: auto; display: block; }
+  .vis-checks { display: flex; flex-direction: column; gap: 14px; }
+  .check-item { display: flex; gap: 12px; }
+  .check-item .mark {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--accent);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .check-item h4 { margin: 0 0 4px; font-size: 15px; font-family: var(--font-body); font-weight: 600; }
+  .check-item p { margin: 0; font-size: 13.5px; color: var(--ink-dim); }
+
+  @media (max-width: 700px) {
+    .vis-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Comparison table ---------- */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: 14px; min-width: 560px; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-dim);
+    background: var(--surface-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.assignment-col { color: var(--ink-dim); }
+  td .mono-inline { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); }
+
+  /* ---------- Threshold strip ---------- */
+  .thresh-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .thresh-cell {
+    background: var(--surface);
+    padding: 16px;
+  }
+  .thresh-cell .val {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 19px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .thresh-cell .lbl {
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-top: 4px;
+  }
+
+  /* ---------- Open questions ---------- */
+  .qa-list { display: flex; flex-direction: column; gap: 12px; }
+  .qa {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--warn);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+  }
+  .qa .kicker {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--warn);
+    margin-bottom: 6px;
+  }
+  .qa h4 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+  .qa p { margin: 0; font-size: 13.75px; color: var(--ink-dim); }
+
+  /* ---------- Coverage legend footer ---------- */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px;
+    padding-top: 36px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink-dim); }
+  .swatch { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; }
+
+  footer {
+    padding: 40px 0 10px;
+    font-size: 12.5px;
+    color: var(--ink-dim);
+    font-family: var(--font-mono);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { animation: rise 0.5s ease both; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+
+<div class="theme-toggle" role="group" aria-label="Theme">
+  <button type="button" data-set-theme="light" aria-pressed="false">Light</button>
+  <button type="button" data-set-theme="dark" aria-pressed="false">Dark</button>
+  <button type="button" data-set-theme="system" aria-pressed="true">Auto</button>
+</div>
+
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow"><span class="dot"></span>Parallel Robotics Lab &nbsp;·&nbsp; TA Briefing</p>
+    <h1>Next-Best-View Scan Pipeline</h1>
+    <p class="lede">
+      A closed-loop system on a simulated UR5 + Robotiq-85: generate candidate camera views around a known object,
+      filter for reachability, greedily pick the view that reveals the most unseen surface, move there with
+      collision-aware planning, capture, repeat. No grasping.
+    </p>
+    <div class="hero-stats">
+      <div class="stat"><div class="num">92%</div><div class="label">known-CAD coverage reached</div></div>
+      <div class="stat"><div class="num">90–95%</div><div class="label">target range set by scope</div></div>
+      <div class="stat"><div class="num">15mm</div><div class="label">base excluded (unobservable)</div></div>
+    </div>
+    <div class="run-cmd"><span class="prompt">$</span> conda run -n rob_env python full_pipeline.py --gui --view</div>
+  </header>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">Six pieces, one loop</p>
+      <h2>How it's built, stage by stage</h2>
+      <p>Each stage is independently testable and tied together by <code class="mono">nbv_planner.py</code>, driven end-to-end by <code class="mono">full_pipeline.py</code>.</p>
+    </div>
+    <div class="stage-list">
+      <div class="stage reveal">
+        <div class="stage-letter">A</div>
+        <div>
+          <h3>Reachability cache</h3>
+          <p>Sample a hemisphere shell of candidate camera poses around the object; IK-check each with CuRobo; cache reachable ones to disk. Computed once, not per run.</p>
+          <div class="files"><span class="filechip">build_reachability_cache.py</span><span class="filechip">nbv_core/reachability.py</span></div>
+        </div>
+      </div>
+      <div class="stage reveal">
+        <div class="stage-letter">B</div>
+        <div>
+          <h3>Known-CAD coverage</h3>
+          <p>Sample 5,000 points + normals off the real mesh surface — the fixed checklist. Track which ones a real capture has confirmed seen.</p>
+          <div class="files"><span class="filechip">nbv_core/coverage.py</span></div>
+        </div>
+      </div>
+      <div class="stage reveal">
+        <div class="stage-letter">C</div>
+        <div>
+          <h3>GPU ray-scoring</h3>
+          <p>For each reachable candidate, batched ray/triangle intersection (own Möller–Trumbore, PyTorch/CUDA) scores how many currently-unseen points it would reveal.</p>
+          <div class="files"><span class="filechip">nbv_core/ray_scoring.py</span></div>
+        </div>
+      </div>
+      <div class="stage reveal">
+        <div class="stage-letter">D</div>
+        <div>
+          <h3>NBV planner</h3>
+          <p>Greedy argmax over A's candidates, scored by C, against B's live coverage state. Stops at target coverage or when nothing worthwhile remains.</p>
+          <div class="files"><span class="filechip">nbv_planner.py</span></div>
+        </div>
+      </div>
+      <div class="stage reveal">
+        <div class="stage-letter">E</div>
+        <div>
+          <h3>Motion execution</h3>
+          <p>CuRobo <code class="mono">MotionGen</code> plans a collision-aware trajectory — self-collision and object/table collision — not a hand-rolled IK glide.</p>
+          <div class="files"><span class="filechip">nbv_core/motion_planning.py</span></div>
+        </div>
+      </div>
+      <div class="stage reveal">
+        <div class="stage-letter">F</div>
+        <div>
+          <h3>Orchestration</h3>
+          <p>Wires A–E into the real scan loop. Captures a real depth image and backprojects it after every successful move.</p>
+          <div class="files"><span class="filechip">full_pipeline.py</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">run_scan_and_reconstruct()</p>
+      <h2>Inside the loop</h2>
+      <p>One iteration, three calls — decide, move, sense — repeated until coverage is high enough or nothing reachable is left worth visiting.</p>
+    </div>
+
+    <div class="loop reveal">
+      <div class="loop-node">
+        <span class="tag">DECIDE</span>
+        <span class="fn">select_next_view_pose()</span>
+        <span class="desc">nbv_planner.py — greedy pick from the cached candidates, or <code class="mono">None</code> to stop</span>
+      </div>
+      <div class="loop-arrow" aria-hidden="true">
+        <svg width="26" height="16" viewBox="0 0 26 16" fill="none"><path d="M0 8H24M24 8L17 1M24 8L17 15" stroke="currentColor" stroke-width="1.6"/></svg>
+      </div>
+      <div class="loop-node">
+        <span class="tag">MOVE</span>
+        <span class="fn">move_camera_to()</span>
+        <span class="desc">nbv_core/motion_planning.py — CuRobo MotionGen plans + executes the trajectory</span>
+      </div>
+      <div class="loop-arrow" aria-hidden="true">
+        <svg width="26" height="16" viewBox="0 0 26 16" fill="none"><path d="M0 8H24M24 8L17 1M24 8L17 15" stroke="currentColor" stroke-width="1.6"/></svg>
+      </div>
+      <div class="loop-node">
+        <span class="tag">SENSE</span>
+        <span class="fn">capture_and_backproject_view()</span>
+        <span class="desc">full_pipeline.py — real depth capture → mustard-only filter → world-frame points</span>
+      </div>
+    </div>
+    <div class="loop-repeat">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15 4.5A6.5 6.5 0 1 0 16 9" stroke="currentColor" stroke-width="1.5"/><path d="M15 1.5V4.5H12" stroke="currentColor" stroke-width="1.5"/></svg>
+      captured points feed back into the next DECIDE — coverage state updates before the next candidate is scored
+    </div>
+
+    <div class="greedy">
+      <h4>What "decide" actually does — <code class="mono" style="font-weight:600;">NBVPlanner.select_next()</code></h4>
+      <ol>
+        <li>Fold any newly captured points into the coverage tracker (<code>CoverageTracker.update()</code>)</li>
+        <li>Stop and return <code>None</code> if coverage &ge; target</li>
+        <li>Stop and return <code>None</code> if every reachable candidate has been tried</li>
+        <li>GPU ray-score every untried candidate against the currently-unseen points</li>
+        <li>Stop and return <code>None</code> if even the best score isn't worth a move</li>
+        <li>Otherwise: mark the winner visited, return its pose</li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">nbv_core/ray_scoring.py</p>
+      <h2>How a candidate view gets scored</h2>
+      <p>For every still-unseen point on the checklist, one candidate pose has to pass two independent checks before it counts as visible from there.</p>
+    </div>
+    <div class="vis-grid">
+      <div class="vis-diagram reveal">
+        <svg viewBox="0 0 420 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Diagram of front-facing and occlusion checks for a candidate camera view">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <!-- bottle silhouette -->
+          <path d="M195 40 h30 v22 c22 8 34 30 34 55 v110 c0 14 -11 25 -25 25 h-48 c-14 0 -25 -11 -25 -25 V117 c0 -25 12 -47 34 -55 Z"
+                fill="none" stroke="var(--ink-dim)" stroke-width="2" opacity="0.55"/>
+          <!-- occluding point (blocked target, back of bottle) -->
+          <circle cx="205" cy="150" r="5" fill="var(--warn)"/>
+          <text x="205" y="135" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--warn)" text-anchor="middle">blocked</text>
+          <!-- visible target point (front, facing camera) -->
+          <circle cx="245" cy="185" r="5" fill="var(--accent)"/>
+          <text x="245" y="205" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--accent)" text-anchor="middle">visible</text>
+          <!-- normal arrow on visible point -->
+          <line x1="245" y1="185" x2="285" y2="165" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#arrow)"/>
+          <text x="292" y="163" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="var(--ink-dim)">normal</text>
+          <!-- camera position -->
+          <circle cx="345" cy="230" r="6" fill="var(--ink)"/>
+          <text x="345" y="252" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink)" text-anchor="middle">camera</text>
+          <!-- ray: camera -> visible point, clear -->
+          <line x1="339" y1="225" x2="251" y2="188" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="0"/>
+          <!-- ray: camera -> blocked point, interrupted by bottle body -->
+          <line x1="339" y1="228" x2="255" y2="180" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="4 3" opacity="0" />
+          <line x1="339" y1="228" x2="228" y2="172" stroke="var(--warn)" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <circle cx="228" cy="172" r="2.5" fill="var(--warn)"/>
+        </svg>
+      </div>
+      <div class="vis-checks reveal">
+        <div class="check-item">
+          <span class="mark">01</span>
+          <div>
+            <h4>Front-facing</h4>
+            <p>Angle between the point's own outward normal and the direction toward the camera must be small enough — is this bit of surface facing me, or facing away.</p>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="mark">02</span>
+          <div>
+            <h4>Not occluded</h4>
+            <p>Fire a ray from the candidate straight at the point. If it hits the bottle's own body first, something else on the object is in the way — self-occlusion.</p>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="mark">Σ</span>
+          <div>
+            <h4>Score = count</h4>
+            <p>Sum of currently-unseen points that pass both checks, per candidate. The candidate with the highest sum is the next move.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">Design reference</p>
+      <h2>Where this differs from the CUDA assignment</h2>
+      <p>Same overall shape — known model, GPU visibility test, greedy pick — reimplemented against a continuous mesh instead of a voxel grid, since that's what a known-CAD assumption actually gives you.</p>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Piece</th><th>Assignment04</th><th>This project</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Known model</td>
+            <td class="assignment-col">Dense occupancy voxel grid</td>
+            <td>Continuous mesh, sampled into 5,000 surface points + normals</td>
+          </tr>
+          <tr>
+            <td>Visibility test</td>
+            <td class="assignment-col">Ray marching — step along the ray, re-check the grid cell each step</td>
+            <td>Exact ray/triangle intersection <span class="mono-inline">(Möller–Trumbore)</span> — one closed-form solve, no stepping</td>
+          </tr>
+          <tr>
+            <td>"Already seen" test</td>
+            <td class="assignment-col">Exact voxel-index match — safe, since data is synthetic and noise-free</td>
+            <td>Nearest-neighbor + 6mm threshold + normal check — real sensor points never land exactly on the checklist</td>
+          </tr>
+          <tr>
+            <td>GPU mechanism</td>
+            <td class="assignment-col">Hand-written <span class="mono-inline">.cu</span> kernel</td>
+            <td>Batched PyTorch tensor ops, dispatched to CUDA automatically</td>
+          </tr>
+          <tr>
+            <td>Loop structure</td>
+            <td class="assignment-col">One greedy step, demonstrated from every possible starting viewpoint</td>
+            <td>One continuous sequence, iterated to convergence against a live, real coverage state</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">Tuned, not guessed</p>
+      <h2>Thresholds in play</h2>
+    </div>
+    <div class="thresh-grid reveal">
+      <div class="thresh-cell"><div class="val">5,000</div><div class="lbl">surface samples on checklist</div></div>
+      <div class="thresh-cell"><div class="val">6mm</div><div class="lbl">seen-distance threshold</div></div>
+      <div class="thresh-cell"><div class="val">15mm</div><div class="lbl">base exclusion height</div></div>
+      <div class="thresh-cell"><div class="val">92.5%</div><div class="lbl">coverage stop fraction</div></div>
+      <div class="thresh-cell"><div class="val">150</div><div class="lbl">min score to bother moving</div></div>
+      <div class="thresh-cell"><div class="val">0.35</div><div class="lbl">backface margin (cosine)</div></div>
+      <div class="thresh-cell"><div class="val">3mm</div><div class="lbl">occlusion epsilon</div></div>
+      <div class="thresh-cell"><div class="val">15mm</div><div class="lbl">max pose error to count as "reached"</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head reveal">
+      <p class="section-kicker">Worth raising</p>
+      <h2>Open questions for the TA</h2>
+      <p>None of these block the result — flagging them proactively rather than waiting to be asked.</p>
+    </div>
+    <div class="qa-list">
+      <div class="qa reveal">
+        <div class="kicker">Efficiency, not ceiling</div>
+        <h4>Dynamic NBV needs more views than a fixed orbit for similar coverage</h4>
+        <p>~42 successful views vs. ~16 for the same ~69–70% pre-base-exclusion ceiling. Likely cause: the occlusion test only ray-casts against the object's own mesh, not the arm/gripper — it can't predict when the real camera is blocked by the robot itself.</p>
+      </div>
+      <div class="qa reveal">
+        <div class="kicker">Known simplification</div>
+        <h4>The scorer doesn't model camera field of view</h4>
+        <p>Only position is scored, not orientation or FOV cone — works here because every candidate is pre-oriented to look straight at the object's center, and the object is small enough that this stays a close approximation.</p>
+      </div>
+      <div class="qa reveal">
+        <div class="kicker">Unresolved, worked around</div>
+        <h4>Raw point cloud shows a registration artifact</h4>
+        <p>Adjacent views don't perfectly align when viewed as a raw combined cloud. Root cause not fully isolated. Sidestepped by presenting <code class="mono">coverage_visualization.ply</code> — the known mesh colored by confirmed visibility — instead of raw points.</p>
+      </div>
+      <div class="qa reveal">
+        <div class="kicker">Scope boundary</div>
+        <h4>Object pose is read directly from the simulator</h4>
+        <p>A real deployment would need genuine 6D pose estimation (fiducial marker, ICP against the CAD model, or similar) to place the known mesh — this project gets it for free from PyBullet, since the object never actually needs to be found.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="legend reveal">
+    <div class="legend-item"><span class="swatch" style="background:var(--accent);"></span>seen — confirmed by a real capture</div>
+    <div class="legend-item"><span class="swatch" style="background:var(--ink-dim); opacity:0.5;"></span>unseen — known, not yet confirmed</div>
+    <div class="legend-item"><span class="swatch" style="background:var(--excluded);"></span>excluded — table-contact base, unobservable by design</div>
+  </div>
+
+  <footer>Parallel Robotics Lab — NBV scan-to-coverage pipeline</footer>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var buttons = document.querySelectorAll('[data-set-theme]');
+    var stored = null;
+    try { stored = localStorage.getItem('nbv-briefing-theme'); } catch (e) {}
+
+    function apply(mode) {
+      if (mode === 'light') root.setAttribute('data-theme', 'light');
+      else if (mode === 'dark') root.setAttribute('data-theme', 'dark');
+      else root.removeAttribute('data-theme');
+      buttons.forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b.getAttribute('data-set-theme') === mode));
+      });
+    }
+
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var mode = b.getAttribute('data-set-theme');
+        apply(mode);
+        try { localStorage.setItem('nbv-briefing-theme', mode); } catch (e) {}
+      });
+    });
+
+    apply(stored || 'system');
+  })();
+</script>
