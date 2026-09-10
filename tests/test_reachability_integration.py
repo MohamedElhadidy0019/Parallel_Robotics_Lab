@@ -12,22 +12,21 @@ import sys
 
 import numpy as np
 
-from nbv_core.config import BASE_LINK, EE_LINK
+from nbv_core.config import BASE_LINK, EE_LINK, URDF_PATH
 from nbv_core.reachability import (
     ik_filter,
     sample_candidate_camera_poses,
 )
-from nbv_core.sim_env import ASSET_PATH, SimEnv, ycb_names
+from nbv_core.sim_env import SimEnv, ycb_names
 
 
 def candidates_for(env) -> tuple[np.ndarray, np.ndarray]:
     """The same shell nbv_core.reachability builds, straight off a live env."""
     r_min, r_max = env.orbit_shell()
+    z_min = getattr(env, "table_surface_z", env.table_top_z) + 0.02
     return sample_candidate_camera_poses(
-        env.obj_pos, radius=(r_min, r_max, 2), n_azimuth=36, z_min_world=env.table_top_z
+        env.obj_pos, radius=(r_min, r_max, 2), n_azimuth=36, z_min_world=z_min
     )
-
-URDF_PATH = os.path.join(ASSET_PATH, "ur5_robotiq_85.urdf")
 
 
 def reachability_for(env) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -70,7 +69,8 @@ def test_every_ycb_object_gives_a_usable_shell():
         env = SimEnv(render=False, ycb_object=name)
         try:
             r_min, r_max = env.orbit_shell()
-            d = np.linalg.norm(env.obj_pos[:2] - env.base_pose()[0][:2])
+            arm_base = env.arm_base_pos() if hasattr(env, "arm_base_pos") else env.base_pose()[0]
+            d = np.linalg.norm(env.obj_pos[:2] - arm_base[:2])
             assert r_min < r_max, f"{name}: empty shell"
             assert r_min >= env.framing_distance() - 1e-9, f"{name}: shell too close to frame it"
             assert d + r_max < env.max_reach(), f"{name}: far side out of reach"
@@ -129,7 +129,7 @@ def test_motion_planner_reaches_a_reachable_candidate():
             env._p.getLinkState(env.robot_id, env.camera_link, physicsClientId=env.client_id)[0]
         )
         order = idx[np.argsort(np.linalg.norm(t[idx] - cam, axis=1))]
-        for attempt, i in enumerate(order[:6]):
+        for attempt, i in enumerate(order[:12]):
             ok, t_achieved = move_camera_to(env, t[i], q[i].tolist())
             if ok:
                 assert np.linalg.norm(t_achieved - t[i]) < 0.02

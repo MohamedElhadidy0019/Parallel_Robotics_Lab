@@ -189,7 +189,7 @@ def build_cache_for_object(ycb_object: str | None = None) -> str:
     env = SimEnv(render=False, ycb_object=ycb_object)
     t_obj_world = env.obj_pos
     r_min, r_max = env.orbit_shell()
-    table_top_z = env.table_top_z
+    table_surface_z = getattr(env, "table_surface_z", env.table_top_z)
     t_base_world, q_base_world_xyzw = env.base_pose()
     env.close()
 
@@ -198,9 +198,9 @@ def build_cache_for_object(ycb_object: str | None = None) -> str:
         radius=(r_min, r_max, N_RADIUS),
         elevation_deg=ELEVATION_DEG,
         n_azimuth=N_AZIMUTH,
-        z_min_world=table_top_z,
+        z_min_world=table_surface_z + 0.02,
     )
-    urdf_path = os.path.join(ASSET_PATH, "ur5_robotiq_85.urdf")
+    urdf_path = URDF_PATH
     reachable, q_joints = ik_filter(
         urdf_path, BASE_LINK, EE_LINK, t_cand, q_cand, t_base_world, q_base_world_xyzw
     )

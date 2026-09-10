@@ -7,14 +7,14 @@ import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_PATH  = os.path.join(PROJECT_ROOT, "third_party/shelf_gym_repo/shelf_gym/meshes/urdf")
-URDF_PATH   = os.path.join(ASSET_PATH, "ur5_robotiq_85.urdf")
-YCB_ROOT    = os.path.join(ASSET_PATH, "ycb_objects")
+URDF_PATH   = os.path.join(PROJECT_ROOT, "sim/models/steve.urdf")
+YCB_ROOT    = os.path.join(PROJECT_ROOT, "third_party/shelf_gym_repo/shelf_gym/meshes/urdf/ycb_objects")
 CACHE_DIR   = os.path.join(PROJECT_ROOT, "reachability")
 
-CUROBO_CONFIGS_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "curobo_configs")
-ROBOT_CONFIG_PATH        = os.path.join(CUROBO_CONFIGS_DIR, "ur5_robotiq_85_camera.yml")
-GRADIENT_TRAJOPT_FILE    = os.path.join(CUROBO_CONFIGS_DIR, "gradient_trajopt.yml")
-FINETUNE_TRAJOPT_FILE    = os.path.join(CUROBO_CONFIGS_DIR, "finetune_trajopt.yml")
+CUROBO_CONFIGS_DIR      = os.path.join(PROJECT_ROOT, "sim/curobo_configs")
+ROBOT_CONFIG_PATH        = os.path.join(CUROBO_CONFIGS_DIR, "steve_ur5.yml")
+GRADIENT_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_core/curobo_configs/gradient_trajopt.yml")
+FINETUNE_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_core/curobo_configs/finetune_trajopt.yml")
 
 DEFAULT_YCB_OBJECT = "YcbMustardBottle"
 
@@ -55,6 +55,8 @@ ORBIT_DEPTH_FRACTION = 0.45         # share of leftover reach spent on shell dep
 MAX_POSE_ERROR_M         = 0.015
 TABLE_CLEARANCE_M        = 0.12
 TABLE_COLLISION_HALF_HEIGHT = 0.15
+COLLISION_SPHERE_BUFFER_M = 0.015  # 15 mm: CuRobo robot link collision sphere inflation margin
+MOTION_PLAN_MAX_ATTEMPTS  = 4      # Trajectory optimization attempts per candidate
 
 # -- Coverage target & base exclusion -----------------------------------------
 

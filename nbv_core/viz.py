@@ -70,31 +70,36 @@ class NBVVisualizer:
         rr.log("scene/cad_mesh", rr.Mesh3D(vertex_positions=vertices, triangle_indices=faces))
 
         # 2. Table Slab
-        r = float(env.max_reach())
-        bx, by = float(env.base_pose()[0][0]), float(env.base_pose()[0][1])
-        table_center = [bx, by, float(env.table_top_z) - 0.02]
+        if hasattr(env, "table_aabb"):
+            lo, hi = env.table_aabb
+            table_center = ((lo + hi) / 2.0).tolist()
+            half_sizes = [((hi - lo) / 2.0).tolist()]
+        else:
+            r = float(env.max_reach())
+            bx, by = float(env.base_pose()[0][0]), float(env.base_pose()[0][1])
+            table_center = [bx, by, float(env.table_top_z) - 0.02]
+            half_sizes = [[r, r, 0.02]]
         rr.log(
             "world/table",
             rr.Boxes3D(
                 centers=[table_center],
-                half_sizes=[[r, r, 0.02]],
+                half_sizes=half_sizes,
                 colors=[[165, 115, 65]],
             ),
         )
 
-        # 3. Robot Arm Links (UR5 + Camera + Robotiq-85 Gripper)
-        shapes = env._p.getVisualShapeData(env.robot_id, physicsClientId=env.client_id)
-        robotiq_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "third_party/shelf_gym_repo/shelf_gym/meshes/robotiq_85/visual",
+        # Ground plane at z = 0 (Steve base sits directly on ground)
+        rr.log(
+            "world/ground",
+            rr.Boxes3D(
+                centers=[[0.0, 0.0, -0.01]],
+                half_sizes=[[2.5, 2.5, 0.01]],
+                colors=[[210, 210, 215]],
+            ),
         )
-        mesh_map = {
-            15: os.path.join(robotiq_dir, "robotiq_arg2f_85_outer_knuckle.obj"),
-            16: os.path.join(robotiq_dir, "robotiq_arg2f_85_outer_finger.obj"),
-            17: os.path.join(robotiq_dir, "robotiq_arg2f_85_inner_finger.obj"),
-            19: os.path.join(robotiq_dir, "robotiq_arg2f_85_inner_knuckle.obj"),
-        }
 
+        # 3. Robot Links (MPO-700 Chassis + Cabinet + UR5 + Camera + Robotiq-85 Gripper)
+        shapes = env._p.getVisualShapeData(env.robot_id, physicsClientId=env.client_id)
         self.robot_links_meta = []
         for s in shapes:
             link_id = s[1]
@@ -103,18 +108,21 @@ class NBVVisualizer:
             filename = s[4].decode("utf-8") if isinstance(s[4], bytes) else s[4]
             local_pos, local_orn, rgba = s[5], s[6], s[7]
 
-            if filename.endswith(".dae"):
-                filename = filename.replace(".dae", ".obj")
-            if link_id in mesh_map:
-                filename = mesh_map[link_id]
-
-            if filename and os.path.exists(filename):
-                rr.log(f"world/robot/link_{link_id}/mesh", rr.Asset3D(path=filename, albedo_factor=rgba))
-                self.robot_links_meta.append((link_id, local_pos, local_orn))
+            if filename:
+                if not os.path.isabs(filename):
+                    filename = os.path.abspath(filename)
+                if filename.endswith(".dae"):
+                    obj_cand = filename[:-4] + ".obj"
+                    if os.path.exists(obj_cand):
+                        filename = obj_cand
+                if os.path.exists(filename):
+                    rr.log(f"world/robot/link_{link_id}/mesh", rr.Asset3D(path=filename, albedo_factor=rgba))
+                    scale_vec = dims if (dims and len(dims) == 3) else (1.0, 1.0, 1.0)
+                    self.robot_links_meta.append((link_id, local_pos, local_orn, scale_vec))
             elif geom == 3:  # Box geometry (camera sensor body, gripper pads, ee_link)
                 half_sizes = [[d / 2.0 for d in dims]]
                 rr.log(f"world/robot/link_{link_id}/box", rr.Boxes3D(half_sizes=half_sizes, colors=[rgba]))
-                self.robot_links_meta.append((link_id, local_pos, local_orn))
+                self.robot_links_meta.append((link_id, local_pos, local_orn, (1.0, 1.0, 1.0)))
 
         self.update_robot_pose(env)
         self._update_metrics_hud(current_cov=0.0, total_samples=len(vertices))
@@ -130,18 +138,18 @@ class NBVVisualizer:
         rr.log("benchmark", rr.TextDocument("\n".join(init_tree), media_type="text/markdown"))
 
     def update_robot_pose(self, env) -> None:
-        """Stream current 3D robot arm joint link poses to Rerun."""
+        """Stream current 3D robot joint link poses to Rerun."""
         if not self.enabled or not self.robot_links_meta:
             return
 
-        for link_id, local_pos, local_orn in self.robot_links_meta:
+        for link_id, local_pos, local_orn, scale_vec in self.robot_links_meta:
             if link_id == -1:
                 base_pos, base_orn = env._p.getBasePositionAndOrientation(env.robot_id, physicsClientId=env.client_id)
                 w_pos, w_orn = env._p.multiplyTransforms(base_pos, base_orn, local_pos, local_orn)
             else:
                 st = env._p.getLinkState(env.robot_id, link_id, physicsClientId=env.client_id)
                 w_pos, w_orn = env._p.multiplyTransforms(st[4], st[5], local_pos, local_orn)
-            rr.log(f"world/robot/link_{link_id}", rr.Transform3D(translation=w_pos, quaternion=w_orn))
+            rr.log(f"world/robot/link_{link_id}", rr.Transform3D(translation=w_pos, quaternion=w_orn, scale=scale_vec))
 
     def log_step(
         self,

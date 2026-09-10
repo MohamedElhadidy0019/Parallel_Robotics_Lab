@@ -3,8 +3,33 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import contextlib
+import os
 import numpy as np
-import pybullet as p
+
+@contextlib.contextmanager
+def _suppress_c_output():
+    try:
+        null_fd = os.open(os.devnull, os.O_RDWR)
+        saved_stdout = os.dup(1)
+        saved_stderr = os.dup(2)
+        os.dup2(null_fd, 1)
+        os.dup2(null_fd, 2)
+        os.close(null_fd)
+        yield
+    except Exception:
+        yield
+    finally:
+        try:
+            os.dup2(saved_stdout, 1)
+            os.dup2(saved_stderr, 2)
+            os.close(saved_stdout)
+            os.close(saved_stderr)
+        except Exception:
+            pass
+
+with _suppress_c_output():
+    import pybullet as p
 
 from nbv_core.config import (
     DEFAULT_CAMERA_FAR,

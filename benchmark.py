@@ -57,7 +57,7 @@ from nbv_core.coverage import (
 from nbv_core.motion_planning import _build_world_config, _get_motion_gen
 from nbv_core.ray_scoring import score_candidate_views
 from nbv_core.reachability import ik_filter, sample_candidate_camera_poses
-from nbv_core.sim_env import SimEnv, ycb_names
+from sim.env import SteveSimEnv as SimEnv, ycb_names
 
 
 def time_gpu(fn, n_warmup=1, n_runs=5):
@@ -134,7 +134,7 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
     r_min, r_max = env.orbit_shell()
     def stage_sampling():
         return sample_candidate_camera_poses(
-            env.obj_pos, radius=(r_min, r_max, N_RADIUS), n_azimuth=N_AZIMUTH, z_min_world=env.table_top_z
+            env.obj_pos, radius=(r_min, r_max, N_RADIUS), n_azimuth=N_AZIMUTH, z_min_world=env.table_surface_z + 0.02
         )
 
     mean_t, min_t, max_t = time_cpu(stage_sampling, n_warmup=1, n_runs=runs)
@@ -204,7 +204,7 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
         )
         T_world_cam = np.linalg.inv(view_mat) @ T_OPENGL_OPTICAL
         pts_w = transform_points(pts_c, T_world_cam)
-        is_above = pts_w[:, 2] >= (env.table_top_z + TABLE_CLEARANCE_MARGIN_M)
+        is_above = pts_w[:, 2] >= (env.table_surface_z + TABLE_CLEARANCE_MARGIN_M)
         in_xy = np.linalg.norm(pts_w[:, :2] - env.obj_pos[:2], axis=-1) < WORKSPACE_RADIUS_M
         return pts_w[is_above & in_xy]
 

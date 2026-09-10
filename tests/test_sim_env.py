@@ -31,13 +31,13 @@ def test_robot_loaded_with_ik_links():
         env.close()
 
 
-def test_table_top_matches_robot_base():
-    """The slab's surface must land at the height sim_env derived it from."""
+def test_table_surface_matches_physics_aabb():
+    """The table surface must match the physics engine's AABB top elevation."""
     env = SimEnv(render=False)
     try:
-        assert np.isclose(env.table_top_z, env.base_pose()[0][2], atol=1e-6)
         _, hi = p.getAABB(env.table_id, physicsClientId=env.client_id)
-        assert np.isclose(hi[2], env.table_top_z, atol=0.02), f"table top at {hi[2]}"
+        assert np.isclose(hi[2], env.table_surface_z, atol=1e-4), f"table top at {hi[2]}"
+        assert env.table_surface_z > env.base_pose()[0][2], "table should be elevated above Steve base"
     finally:
         env.close()
 
@@ -70,7 +70,7 @@ def test_orbit_shell_stays_within_reach():
     """The whole point of the placement: far-side candidates must still be reachable."""
     env = SimEnv(render=False)
     try:
-        base = env.base_pose()[0]
+        base = env.arm_base_pos() if hasattr(env, "arm_base_pos") else env.base_pose()[0]
         reach = env.max_reach()
         d = np.linalg.norm(env.obj_pos[:2] - base[:2])
         r_min, r_max = env.orbit_shell()

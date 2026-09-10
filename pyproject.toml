@@ -7,3 +7,6 @@ dependencies = []
 
 [tool.uv.workspace]
 exclude = ["third_party/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

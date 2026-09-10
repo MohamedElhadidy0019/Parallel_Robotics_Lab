@@ -6,10 +6,12 @@ import time
 import numpy as np
 
 from nbv_core.config import (
+    COLLISION_SPHERE_BUFFER_M,
     CUROBO_CONFIGS_DIR,
     FINETUNE_TRAJOPT_FILE,
     GRADIENT_TRAJOPT_FILE,
     MAX_POSE_ERROR_M,
+    MOTION_PLAN_MAX_ATTEMPTS,
     ROBOT_CONFIG_PATH,
     TABLE_CLEARANCE_M,
     TABLE_COLLISION_HALF_HEIGHT,
@@ -20,13 +22,14 @@ from nbv_core.reachability import quaternion_xyzw_to_wxyz, world_poses_to_base_l
 _MOTION_GEN = None
 
 
-def _build_robot_config(tensor_args):
+def _build_robot_config(tensor_args, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M):
     from curobo.types.robot import RobotConfig
     from curobo.util_file import load_yaml
 
     cfg = load_yaml(ROBOT_CONFIG_PATH)
     cfg["robot_cfg"]["kinematics"]["urdf_path"] = URDF_PATH
     cfg["robot_cfg"]["kinematics"]["asset_root_path"] = os.path.dirname(URDF_PATH)
+    cfg["robot_cfg"]["kinematics"]["collision_sphere_buffer"] = float(collision_sphere_buffer)
     return RobotConfig.from_dict(cfg, tensor_args=tensor_args)
 
 
@@ -38,9 +41,12 @@ def _get_motion_gen(env):
         from curobo.types.base import TensorDeviceType
         from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig
 
+        robot_cfg_obj = getattr(getattr(env, "config", None), "robot", None)
+        buf = getattr(robot_cfg_obj, "collision_sphere_buffer", COLLISION_SPHERE_BUFFER_M)
+
         tensor_args = TensorDeviceType()
         cfg = MotionGenConfig.load_from_robot_config(
-            _build_robot_config(tensor_args),
+            _build_robot_config(tensor_args, collision_sphere_buffer=buf),
             _build_world_config(env),
             tensor_args,
             interpolation_dt=0.02,
@@ -61,12 +67,19 @@ def _build_world_config(env):
 
     t_base_world, q_base_world_xyzw = env.base_pose()
 
-    r = env.max_reach()
-    t_table_world = np.array([
-        t_base_world[0],
-        t_base_world[1],
-        env.table_top_z - TABLE_CLEARANCE_M - TABLE_COLLISION_HALF_HEIGHT,
-    ])
+    if hasattr(env, "table_aabb"):
+        lo, hi = env.table_aabb
+        t_table_world = (lo + hi) / 2.0
+        table_dims = (hi - lo).tolist()
+    else:
+        r = env.max_reach()
+        t_table_world = np.array([
+            t_base_world[0],
+            t_base_world[1],
+            env.table_top_z - TABLE_CLEARANCE_M - TABLE_COLLISION_HALF_HEIGHT,
+        ])
+        table_dims = [2 * r, 2 * r, 2 * TABLE_COLLISION_HALF_HEIGHT]
+
     t_table_base, q_table_base_xyzw = world_poses_to_base_link_frame(
         t_table_world[None, :],
         np.array([[0.0, 0.0, 0.0, 1.0]]),
@@ -76,7 +89,7 @@ def _build_world_config(env):
     table = Cuboid(
         name="table",
         pose=[*t_table_base[0].tolist(), *quaternion_xyzw_to_wxyz(q_table_base_xyzw)[0].tolist()],
-        dims=[2 * r, 2 * r, 2 * TABLE_COLLISION_HALF_HEIGHT],
+        dims=table_dims,
     )
 
     t_obj_world, q_obj_world_xyzw = env._p.getBasePositionAndOrientation(
@@ -137,7 +150,7 @@ def move_camera_to(
     )
 
     t_opt_0 = time.perf_counter()
-    result = motion_gen.plan_single(q_start, goal, MotionGenPlanConfig(max_attempts=15))
+    result = motion_gen.plan_single(q_start, goal, MotionGenPlanConfig(max_attempts=MOTION_PLAN_MAX_ATTEMPTS))
     opt_ms = (time.perf_counter() - t_opt_0) * 1000.0
 
     if not bool(result.success.item()):
@@ -223,7 +236,7 @@ def move_camera_to_batch(
 
     t_opt_0 = time.perf_counter()
     result = motion_gen.plan_batch(
-        q_start, goal, MotionGenPlanConfig(max_attempts=15, enable_graph=False, enable_graph_attempt=None)
+        q_start, goal, MotionGenPlanConfig(max_attempts=MOTION_PLAN_MAX_ATTEMPTS, enable_graph=False, enable_graph_attempt=None)
     )
     opt_ms = (time.perf_counter() - t_opt_0) * 1000.0
 
