@@ -8,27 +8,51 @@ Usage:
 """
 
 import argparse
+import io
 import os
+import sys
 import time
 import warnings
 import numpy as np
 import open3d as o3d
 import torch
 
+def _silence_c_output():
+    """Route low-level C/C++ stdout and stderr (PyBullet/OpenGL threads) to /dev/null while keeping Python sys.stdout / sys.stderr intact."""
+    if getattr(sys, "_c_output_silenced", False):
+        return
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        real_out = os.dup(1)
+        real_err = os.dup(2)
+        sys.stdout = io.TextIOWrapper(open(real_out, "wb", buffering=0), encoding="utf-8", write_through=True)
+        sys.stderr = io.TextIOWrapper(open(real_err, "wb", buffering=0), encoding="utf-8", write_through=True)
+        null_fd = os.open(os.devnull, os.O_RDWR)
+        os.dup2(null_fd, 1)
+        os.dup2(null_fd, 2)
+        os.close(null_fd)
+        sys._c_output_silenced = True
+    except Exception:
+        pass
+
+_silence_c_output()
+
 # Suppress noisy library warnings (gymnasium box precision, torch arch list, rerun, deprecations)
 os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "7.5;8.0;8.6;8.9;9.0")
+os.environ.setdefault("RERUN_LOG", "warn")
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", module="gymnasium")
 warnings.filterwarnings("ignore", module="torch")
 warnings.filterwarnings("ignore", module="rerun")
 
-from nbv_core.camera import (
+from sim.camera import capture_rgbd
+from nbv_planner.camera import (
     backproject_depth,
-    capture_rgbd,
     transform_points,
 )
-from nbv_core.config import (
+from nbv_planner.config import (
     BASE_EXCLUSION_HEIGHT_M,
     BASE_LINK,
     DEFAULT_YCB_OBJECT,
@@ -42,18 +66,18 @@ from nbv_core.config import (
     WORKSPACE_RADIUS_M,
     WORLD_UP_Z,
 )
-from nbv_core.coverage import (
+from nbv_planner.coverage import (
     CoverageTracker,
     build_coverage_colored_mesh,
     load_ycb_mesh,
     sample_surface_points_and_normals,
     transform_mesh,
 )
-from nbv_core.motion_planning import move_camera_to_batch
-from nbv_core.ray_scoring import score_candidate_views
-from nbv_core.reachability import ik_filter, sample_candidate_camera_poses
-from nbv_core.sim_env import SimEnv, ycb_names
-from nbv_core.viz import NBVVisualizer
+from nbv_planner.motion_planning import move_camera_to_batch
+from nbv_planner.ray_scoring import score_candidate_views
+from nbv_planner.reachability import ik_filter, sample_candidate_camera_poses
+from nbv_planner.viz import NBVVisualizer
+from sim.env import SteveSimEnv as SimEnv, ycb_names
 
 
 def _capture_object_cloud(env: SimEnv):
@@ -79,7 +103,7 @@ def _capture_object_cloud(env: SimEnv):
     pts_world = transform_points(pts_cam, T_world_cam)
 
     # Real-world tabletop filter: drop points below table surface, keep workspace XY radius (no height limit)
-    is_above_table = pts_world[:, 2] >= (env.table_top_z + TABLE_CLEARANCE_MARGIN_M)
+    is_above_table = pts_world[:, 2] >= (env.table_surface_z + TABLE_CLEARANCE_MARGIN_M)
     in_workspace_xy = np.linalg.norm(pts_world[:, :2] - env.obj_pos[:2], axis=-1) < WORKSPACE_RADIUS_M
 
     return pts_world[is_above_table & in_workspace_xy], rgb, depth_m, view_matrix, t_cam
@@ -105,8 +129,7 @@ def run_nbv_scan(
 ) -> dict:
     """Run full autonomous NBV scan pipeline for a YCB object."""
     print(f"=== Autonomous NBV Scan: {obj_name} ===")
-
-    # [Stage 1/4] Scene & Surface Setup
+    print(f"[1/4] Initializing inspection environment & surface sampling: {obj_name}...")
     t_start_scan = time.perf_counter()
     env = SimEnv(render=gui, ycb_object=obj_name)
     try:
@@ -124,8 +147,8 @@ def run_nbv_scan(
 
         visualizer = NBVVisualizer(obj_name, enabled=viz)
         visualizer.init_scene(env, mesh_world)
-        visualizer.update_setup_stage("Scene & Target Surface", "DONE", f"{len(surface_pts):,} samples (>15mm base excluded)")
-        print(f"      Target surface: {len(surface_pts)} samples (base excluded >{BASE_EXCLUSION_HEIGHT_M*1000:.0f}mm)")
+        visualizer.update_setup_stage("Scene & Target Surface", "DONE", f"{len(surface_pts):,} samples")
+        print(f"      Target surface: {len(surface_pts):,} samples")
 
         # [Stage 2/4] Kinematics & Candidate Filtering
         print("[2/4] Sampling orbit viewpoints & checking cuRobo reachability...")
@@ -134,7 +157,7 @@ def run_nbv_scan(
             env.obj_pos,
             radius=(r_min, r_max, N_RADIUS),
             n_azimuth=N_AZIMUTH,
-            z_min_world=env.table_top_z,
+            z_min_world=env.table_surface_z + 0.02,
         )
         t_base, q_base = env.base_pose()
         visualizer.update_setup_stage("Orbit Viewpoints", "DONE", f"{len(t_cand)} generated")
@@ -304,7 +327,7 @@ def run_nbv_scan(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("object", nargs="?", default=DEFAULT_YCB_OBJECT, choices=ycb_names())
-    parser.add_argument("--views", type=int, default=8, help="Maximum number of scan viewpoints")
+    parser.add_argument("--views", "--frames", type=int, default=8, help="Maximum number of scan viewpoints")
     parser.add_argument("--target-cov", type=float, default=0.95, help="Target coverage fraction (0-1)")
     parser.add_argument("--samples", type=int, default=4000, help="Surface sampling resolution")
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet live simulation window")

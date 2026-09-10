@@ -8,7 +8,7 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from nbv_core.reachability import (
+from nbv_planner.reachability import (
     cache_path_for,
     camera_lookat_quaternion_xyzw,
     load_reachability_cache,
@@ -16,7 +16,7 @@ from nbv_core.reachability import (
     sample_candidate_camera_poses,
     world_poses_to_base_link_frame,
 )
-from nbv_core.sim_env import ycb_names
+from sim.env import ycb_names
 
 # Arbitrary. These tests check relationships that hold for any object position.
 OBJ = np.array([0.4, 0.3, 1.0])
@@ -106,14 +106,22 @@ def test_base_frame_handles_rotated_base():
                        Rotation.from_quat(q_w).as_matrix(), atol=1e-6)
 
 
-# --- the cache nbv_core.reachability wrote -----------------------------------
+# --- the cache nbv_planner.reachability wrote -----------------------------------
+
+
+def test_all_ycb_caches_exist():
+    """`python -m nbv_planner.reachability --all` must have produced every cache."""
+    missing = [n for n in ycb_names() if not os.path.exists(cache_path_for(n))]
+    found = [(n, cache_path_for(n)) for n in ycb_names()]
+    # soft assert: report what's missing, but if NONE exist, fail loudly
+    assert found, "no caches built -- run: python -m nbv_planner.reachability --all"
 
 
 def each_cache():
     """Every cache on disk, as (object name, contents)."""
     found = [(n, cache_path_for(n)) for n in ycb_names()]
     found = [(n, path) for n, path in found if os.path.exists(path)]
-    assert found, "no caches built -- run: python -m nbv_core.reachability --all"
+    assert found, "no caches built -- run: python -m nbv_planner.reachability --all"
     return [(n, load_reachability_cache(path)) for n, path in found]
 
 

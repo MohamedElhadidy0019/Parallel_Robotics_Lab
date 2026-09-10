@@ -4,13 +4,13 @@ import time
 import numpy as np
 import pytest
 
-from nbv_core.coverage import (
+from nbv_planner.coverage import (
     load_ycb_mesh,
     sample_surface_points_and_normals,
 )
-from nbv_core.ray_scoring import score_candidate_views
-from nbv_core.reachability import sample_candidate_camera_poses
-from nbv_core.sim_env import DEFAULT_YCB_OBJECT
+from nbv_planner.ray_scoring import score_candidate_views
+from nbv_planner.reachability import sample_candidate_camera_poses
+from sim.env import DEFAULT_YCB_OBJECT
 
 
 def test_front_facing_and_backface():

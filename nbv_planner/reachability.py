@@ -3,7 +3,7 @@
 import os
 import numpy as np
 
-from nbv_core.config import (
+from nbv_planner.config import (
     BASE_LINK,
     CACHE_DIR,
     EE_LINK,
@@ -14,6 +14,7 @@ from nbv_core.config import (
     N_AZIMUTH,
     N_RADIUS,
     NEAR_VERTICAL_COSINE,
+    URDF_PATH,
     WORLD_UP_Y_FALLBACK,
     WORLD_UP_Z,
     XYZW_TO_WXYZ,
@@ -180,8 +181,7 @@ def load_reachability_cache(cache_path: str) -> dict:
 
 def build_cache_for_object(ycb_object: str | None = None) -> str:
     """Build a reachability cache for one object. Returns the path written."""
-    # Deferred: the rest of this module is importable without a sim or GPU.
-    from nbv_core.sim_env import ASSET_PATH, DEFAULT_YCB_OBJECT, SimEnv
+    from sim.env import SteveSimEnv as SimEnv, DEFAULT_YCB_OBJECT
 
     ycb_object = ycb_object or DEFAULT_YCB_OBJECT
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -216,7 +216,7 @@ def build_cache_for_object(ycb_object: str | None = None) -> str:
 if __name__ == "__main__":
     import argparse
 
-    from nbv_core.sim_env import DEFAULT_YCB_OBJECT, ycb_names
+    from sim.env import DEFAULT_YCB_OBJECT, ycb_names
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("object", nargs="?", default=DEFAULT_YCB_OBJECT, choices=ycb_names())

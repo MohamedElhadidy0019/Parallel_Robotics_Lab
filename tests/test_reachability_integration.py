@@ -12,16 +12,16 @@ import sys
 
 import numpy as np
 
-from nbv_core.config import BASE_LINK, EE_LINK, URDF_PATH
-from nbv_core.reachability import (
+from nbv_planner.config import BASE_LINK, EE_LINK, URDF_PATH
+from nbv_planner.reachability import (
     ik_filter,
     sample_candidate_camera_poses,
 )
-from nbv_core.sim_env import SimEnv, ycb_names
+from sim.env import SteveSimEnv as SimEnv, ycb_names
 
 
 def candidates_for(env) -> tuple[np.ndarray, np.ndarray]:
-    """The same shell nbv_core.reachability builds, straight off a live env."""
+    """The same shell nbv_planner.reachability builds, straight off a live env."""
     r_min, r_max = env.orbit_shell()
     z_min = getattr(env, "table_surface_z", env.table_top_z) + 0.02
     return sample_candidate_camera_poses(
@@ -117,7 +117,7 @@ def test_ik_joints_put_the_camera_where_promised():
 
 def test_motion_planner_reaches_a_reachable_candidate():
     """The full loop: IK → plan → execute → camera lands on the target."""
-    from nbv_core.motion_planning import move_camera_to
+    from nbv_planner.motion_planning import move_camera_to
 
     env = SimEnv(render=False)
     try:
@@ -163,7 +163,7 @@ def show() -> None:
     """Live view: IK → motion-plan to a reachable candidate, then run the test suite."""
     import time
 
-    from nbv_core.motion_planning import move_camera_to
+    from nbv_planner.motion_planning import move_camera_to
 
     env = SimEnv(render=True, ycb_object=sys.argv[2] if len(sys.argv) > 2 else "YcbMustardBottle")
     cid = env.client_id

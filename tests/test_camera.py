@@ -7,15 +7,17 @@ import numpy as np
 import pybullet as p
 import pybullet_data
 
-from nbv_core.camera import (
+from nbv_planner.camera import (
     CameraIntrinsics,
     backproject_depth,
-    capture_rgbd,
-    depth_buffer_to_linear,
     edge_discontinuity_mask,
     transform_points,
 )
-from nbv_core.sim_env import DEFAULT_YCB_OBJECT, ycb_names, ycb_urdf
+from sim.camera import (
+    capture_rgbd,
+    depth_buffer_to_linear,
+)
+from sim.env import DEFAULT_YCB_OBJECT, ycb_names, ycb_urdf
 
 # OpenGL cam frame (X right, Y up, Z back) -> optical (X right, Y down, Z fwd).
 T_OPENGL_OPTICAL = np.diag([1.0, -1.0, -1.0, 1.0]).astype(np.float32)

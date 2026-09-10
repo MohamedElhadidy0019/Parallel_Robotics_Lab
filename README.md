@@ -70,32 +70,32 @@ Autonomous Next-Best-View (NBV) 3D scanning system on a simulated UR5 robot arm 
 
 ## 2. Core Modules Breakdown
 
-### 1. Scene & Physics (`nbv_core/sim_env.py`)
-* **Robot Setup:** UR5 6-DOF manipulator with Robotiq-85 gripper and wrist-mounted RealSense D435 camera.
+### 1. Scene & Physics (`sim/env.py`)
+* **Robot Setup:** UR5 6-DOF manipulator with Robotiq-85 gripper and wrist-mounted RealSense D435 camera on Steve mobile base.
 * **Objects:** 12 YCB benchmark objects placed on a tabletop workspace.
 * **Settling Physics:** Physics-steps object until linear and angular velocity fall below tolerance.
 * **Inertial vs Visual Frame Math:**
   PyBullet `getBasePositionAndOrientation()` reports the Center-of-Mass (Inertial) frame. The visual CAD mesh is transformed into world coordinates via:
   $$T_{\text{world\_vis}} = T_{\text{world\_inertial}} \cdot T_{\text{link\_inertial}}^{-1} \cdot T_{\text{link\_visual}}$$
 
-### 2. Candidate Generation & Kinematics (`nbv_core/reachability.py`)
+### 2. Candidate Generation & Kinematics (`nbv_planner/reachability.py`)
 * **Orbit Shell:** Generates camera viewpoints across spherical shell radii, azimuths, and elevations above the tabletop plane.
 * **Camera Look-At:** Computes camera orientation targeting object centroid with positive Z camera optical axis.
 * **cuRobo Batched IK:** Parallel inverse kinematics solver filters candidate pool down to reachable poses before trajectory planning.
 
-### 3. Custom CUDA Ray Scoring Kernel (`nbv_core/csrc/` & `nbv_core/ray_scoring.py`)
+### 3. Custom CUDA Ray Scoring Kernel (`nbv_planner/csrc/` & `nbv_planner/ray_scoring.py`)
 * **PyTorch C++/CUDA Extension:** JIT-compiled native kernel (`score_candidate_views_cuda`).
 * **Moller-Trumbore Algorithm:** Evaluates ray-triangle intersections against the object CAD mesh.
 * **Early-Exit Occlusion:** Thread terminates immediately upon the first blocking triangle hit.
 * **Backface Culling:** Ignores surface normals angled $> 90^\circ$ away from the camera optical axis.
 * **Performance:** Evaluates 200 viewpoints against 3,500 target points and 15,000 mesh triangles in $\sim 200 - 250\text{ms}$ on GTX 1650.
 
-### 4. Collision-Aware Motion Planning (`nbv_core/motion_planning.py`)
+### 4. Collision-Aware Motion Planning (`nbv_planner/motion_planning.py`)
 * **cuRobo MotionGen:** GPU gradient trajectory optimizer with collision spheres avoiding the table slab and object bounding boxes.
 * **Rank-Fallback Execution:** If candidate #1 fails trajectory planning due to table collision constraints, candidate #2, #3, etc. are attempted automatically.
 
-### 5. Sensing & Coverage Tracking (`nbv_core/camera.py` & `nbv_core/coverage.py`)
-* **Depth Linearization:** Converts non-linear OpenGL depth buffer values to metric distance.
+### 5. Sensing & Coverage Tracking (`nbv_planner/camera.py` & `nbv_planner/coverage.py`)
+* **Depth Linearization:** Converts non-linear OpenGL depth buffer values to metric distance (`sim/camera.py`).
 * **Edge Masking:** Drops pixel boundary steps $> 2\text{cm}$ to avoid flying edge artifacts.
 * **Coverage Tracker:** CPU-based `scipy.spatial.cKDTree` matches reconstructed points to surface targets within 8mm radius and normal alignment $> 45^\circ$.
 * **Base Exclusion:** Bottom surface contact area ($z \le z_{\text{table}} + 15\text{mm}$) is excluded from coverage target denominator as it is physically occluded by the tabletop.
@@ -132,17 +132,17 @@ python main.py YcbCrackerBox --views 8 --viz
 
 ## 4. Viewing Scan Results
 
-### Interactive 3D Viewer (`view_scan.py`)
+### Interactive 3D Viewer (`scripts/view_scan.py`)
 
 ```bash
 # View reconstructed point cloud in Rerun
-python view_scan.py captures/scan_YcbMustardBottle.ply
+python scripts/view_scan.py captures/scan_YcbMustardBottle.ply
 
 # View coverage-colored mesh (Green = Seen, Gray = Unseen)
-python view_scan.py captures/coverage_YcbMustardBottle.ply
+python scripts/view_scan.py captures/coverage_YcbMustardBottle.ply
 
 # View in PyBullet OpenGL window instead of Rerun
-python view_scan.py captures/scan_YcbMustardBottle.ply --pb
+python scripts/view_scan.py captures/scan_YcbMustardBottle.ply --pb
 ```
 
 ---

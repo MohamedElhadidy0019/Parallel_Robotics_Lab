@@ -3,8 +3,8 @@
 import numpy as np
 import pybullet as p
 
-from nbv_core.config import BASE_LINK, EE_LINK
-from nbv_core.sim_env import SimEnv
+from nbv_planner.config import BASE_LINK, EE_LINK
+from sim.env import SteveSimEnv as SimEnv
 
 
 def links(env) -> dict:

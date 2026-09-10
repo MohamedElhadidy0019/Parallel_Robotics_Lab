@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Sequence
 
-from nbv_core.camera import CameraIntrinsics
+from nbv_planner.camera import CameraIntrinsics
 
 
 @dataclass

@@ -6,7 +6,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 import trimesh
 
-from nbv_core.config import YCB_ROOT
+from nbv_planner.config import YCB_ROOT
 
 DEFAULT_SEEN_DISTANCE_THRESHOLD_M = 0.008
 DEFAULT_NORMAL_CONSISTENCY_MIN = -0.2

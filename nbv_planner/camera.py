@@ -1,37 +1,10 @@
-"""Render RGB-D in PyBullet and turn the depth image into 3D points."""
+"""Pure geometric and pinhole camera utilities for 3D point backprojection."""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
-
-import contextlib
-import os
 import numpy as np
 
-@contextlib.contextmanager
-def _suppress_c_output():
-    try:
-        null_fd = os.open(os.devnull, os.O_RDWR)
-        saved_stdout = os.dup(1)
-        saved_stderr = os.dup(2)
-        os.dup2(null_fd, 1)
-        os.dup2(null_fd, 2)
-        os.close(null_fd)
-        yield
-    except Exception:
-        yield
-    finally:
-        try:
-            os.dup2(saved_stdout, 1)
-            os.dup2(saved_stderr, 2)
-            os.close(saved_stdout)
-            os.close(saved_stderr)
-        except Exception:
-            pass
-
-with _suppress_c_output():
-    import pybullet as p
-
-from nbv_core.config import (
+from nbv_planner.config import (
     DEFAULT_CAMERA_FAR,
     DEFAULT_CAMERA_FOV,
     DEFAULT_CAMERA_HEIGHT,
@@ -69,11 +42,6 @@ class CameraIntrinsics:
     def cy(self) -> float:
         """Optical centre, y."""
         return self.height / 2.0
-
-
-def depth_buffer_to_linear(depth_buf: np.ndarray, near: float, far: float) -> np.ndarray:
-    """Convert PyBullet's [0, 1] depth buffer to metres."""
-    return far * near / (far - (far - near) * depth_buf)
 
 
 def edge_discontinuity_mask(depth_m: np.ndarray, threshold_m: float = 0.02) -> np.ndarray:
@@ -129,43 +97,3 @@ def transform_points(points: np.ndarray, transform_4x4: np.ndarray) -> np.ndarra
     R = transform_4x4[:3, :3]
     t = transform_4x4[:3, 3:4]
     return (R @ points.T + t).T
-
-
-def capture_rgbd(
-    cam_pos: np.ndarray,
-    target_pos: np.ndarray,
-    up_vector: np.ndarray,
-    intrinsics: CameraIntrinsics,
-    physics_client_id: int = 0,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Render one view. Returns (rgb, depth in metres, view matrix, projection matrix)."""
-    view_matrix = p.computeViewMatrix(
-        cameraEyePosition=cam_pos.tolist(),
-        cameraTargetPosition=target_pos.tolist(),
-        cameraUpVector=up_vector.tolist(),
-        physicsClientId=physics_client_id,
-    )
-    proj_matrix = p.computeProjectionMatrixFOV(
-        fov=intrinsics.fov,
-        aspect=intrinsics.width / intrinsics.height,
-        nearVal=intrinsics.near,
-        farVal=intrinsics.far,
-        physicsClientId=physics_client_id,
-    )
-    _, _, rgb_img, depth_img, _ = p.getCameraImage(
-        width=intrinsics.width,
-        height=intrinsics.height,
-        viewMatrix=view_matrix,
-        projectionMatrix=proj_matrix,
-        renderer=p.ER_BULLET_HARDWARE_OPENGL,
-        physicsClientId=physics_client_id,
-    )
-
-    rgb = np.array(rgb_img, dtype=np.uint8)[:, :, :3]  # drop alpha
-    depth_buf = np.array(depth_img, dtype=np.float32)
-    depth_m = depth_buffer_to_linear(depth_buf, intrinsics.near, intrinsics.far).astype(np.float32)
-
-    # PyBullet returns these flat and column-major.
-    view_np = np.array(view_matrix, dtype=np.float32).reshape((4, 4), order="F")
-    proj_np = np.array(proj_matrix, dtype=np.float32).reshape((4, 4), order="F")
-    return rgb, depth_m, view_np, proj_np

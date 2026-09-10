@@ -6,9 +6,9 @@ import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
 
-from nbv_core.camera import CameraIntrinsics
-from nbv_core.config import T_OPENGL_OPTICAL
-from nbv_core.coverage import CoverageTracker
+from nbv_planner.camera import CameraIntrinsics
+from nbv_planner.config import T_OPENGL_OPTICAL
+from nbv_planner.coverage import CoverageTracker
 
 
 class NBVVisualizer:

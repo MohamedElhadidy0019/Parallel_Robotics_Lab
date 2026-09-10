@@ -5,7 +5,10 @@ import time
 
 import numpy as np
 
-from nbv_core.config import (
+from dataclasses import dataclass
+from typing import Sequence
+
+from nbv_planner.config import (
     COLLISION_SPHERE_BUFFER_M,
     CUROBO_CONFIGS_DIR,
     FINETUNE_TRAJOPT_FILE,
@@ -17,7 +20,17 @@ from nbv_core.config import (
     TABLE_COLLISION_HALF_HEIGHT,
     URDF_PATH,
 )
-from nbv_core.reachability import quaternion_xyzw_to_wxyz, world_poses_to_base_link_frame
+from nbv_planner.reachability import quaternion_xyzw_to_wxyz, world_poses_to_base_link_frame
+
+
+@dataclass
+class TrajectoryPlan:
+    """Collision-free joint trajectory computed by cuRobo."""
+    success: bool
+    trajectory: np.ndarray | None  # (T, num_joints)
+    joint_names: list[str]
+    best_candidate_idx: int = -1
+    optimization_ms: float = 0.0
 
 _MOTION_GEN = None
 

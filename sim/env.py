@@ -42,8 +42,9 @@ def _suppress_c_output():
 import pybullet as p
 import pybullet_data
 
-from nbv_core.camera import CameraIntrinsics, capture_rgbd
-from nbv_core.config import (
+from sim.camera import capture_rgbd
+from nbv_planner.camera import CameraIntrinsics
+from nbv_planner.config import (
     DEFAULT_YCB_OBJECT,
     ORBIT_DEPTH_FRACTION,
     WORLD_UP_Z,

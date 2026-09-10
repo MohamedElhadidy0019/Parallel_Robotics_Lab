@@ -13,8 +13,8 @@ CACHE_DIR   = os.path.join(PROJECT_ROOT, "reachability")
 
 CUROBO_CONFIGS_DIR      = os.path.join(PROJECT_ROOT, "sim/curobo_configs")
 ROBOT_CONFIG_PATH        = os.path.join(CUROBO_CONFIGS_DIR, "steve_ur5.yml")
-GRADIENT_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_core/curobo_configs/gradient_trajopt.yml")
-FINETUNE_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_core/curobo_configs/finetune_trajopt.yml")
+GRADIENT_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_planner/curobo_configs/gradient_trajopt.yml")
+FINETUNE_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_planner/curobo_configs/finetune_trajopt.yml")
 
 DEFAULT_YCB_OBJECT = "YcbMustardBottle"
 

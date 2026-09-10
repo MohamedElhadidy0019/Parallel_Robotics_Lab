@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from nbv_core.coverage import (
+from nbv_planner.coverage import (
     CoverageTracker,
     build_coverage_colored_mesh,
     load_ycb_mesh,
@@ -11,7 +11,7 @@ from nbv_core.coverage import (
     transform_mesh,
     ycb_mesh_path,
 )
-from nbv_core.sim_env import DEFAULT_YCB_OBJECT, ycb_names
+from sim.env import DEFAULT_YCB_OBJECT, ycb_names
 
 
 def test_ycb_mesh_paths_exist():

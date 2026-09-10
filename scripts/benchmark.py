@@ -33,8 +33,9 @@ warnings.filterwarnings("ignore", module="gymnasium")
 warnings.filterwarnings("ignore", module="torch")
 warnings.filterwarnings("ignore", module="rerun")
 
-from nbv_core.camera import backproject_depth, capture_rgbd, transform_points
-from nbv_core.config import (
+from sim.camera import capture_rgbd
+from nbv_planner.camera import backproject_depth, transform_points
+from nbv_planner.config import (
     BASE_EXCLUSION_HEIGHT_M,
     BASE_LINK,
     DEFAULT_YCB_OBJECT,
@@ -48,15 +49,15 @@ from nbv_core.config import (
     WORKSPACE_RADIUS_M,
     WORLD_UP_Z,
 )
-from nbv_core.coverage import (
+from nbv_planner.coverage import (
     CoverageTracker,
     load_ycb_mesh,
     sample_surface_points_and_normals,
     transform_mesh,
 )
-from nbv_core.motion_planning import _build_world_config, _get_motion_gen
-from nbv_core.ray_scoring import score_candidate_views
-from nbv_core.reachability import ik_filter, sample_candidate_camera_poses
+from nbv_planner.motion_planning import _build_world_config, _get_motion_gen
+from nbv_planner.ray_scoring import score_candidate_views
+from nbv_planner.reachability import ik_filter, sample_candidate_camera_poses
 from sim.env import SteveSimEnv as SimEnv, ycb_names
 
 
@@ -166,7 +167,7 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
     from curobo.types.math import Pose
     from curobo.types.robot import JointState
     from curobo.wrap.reacher.motion_gen import MotionGenPlanConfig
-    from nbv_core.reachability import quaternion_xyzw_to_wxyz, world_poses_to_base_link_frame
+    from nbv_planner.reachability import quaternion_xyzw_to_wxyz, world_poses_to_base_link_frame
 
     motion_gen = _get_motion_gen(env)
     motion_gen.update_world(_build_world_config(env))

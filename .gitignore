@@ -10,4 +10,5 @@ captures/
 uv.lock
 build/
 nbv_core/csrc/build/
+nbv_planner/csrc/build/
 *.so

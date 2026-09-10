@@ -1,8 +1,12 @@
+[build-system]
+requires = ["setuptools>=61.0", "torch"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "rob-env"
+name = "nbv-planner"
 version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.12"
+description = "Autonomous Next-Best-View 3D scanning and inspection planner"
+requires-python = ">=3.10"
 dependencies = []
 
 [tool.uv.workspace]
