@@ -18,14 +18,20 @@ Usage:
 """
 
 import argparse
+import os
 import time
 import warnings
 import numpy as np
 import torch
 import rerun as rr
 
+# Suppress noisy library warnings (gymnasium box precision, torch arch list, rerun, deprecations)
+os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "7.5;8.0;8.6;8.9;9.0")
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", module="gymnasium")
+warnings.filterwarnings("ignore", module="torch")
+warnings.filterwarnings("ignore", module="rerun")
 
 from nbv_core.camera import backproject_depth, capture_rgbd, transform_points
 from nbv_core.config import (
@@ -103,8 +109,9 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
         env_temp = SimEnv(render=False, ycb_object=obj_name)
         pos, orn = env_temp._p.getBasePositionAndOrientation(env_temp.obj_id, physicsClientId=env_temp.client_id)
         mesh_t = transform_mesh(load_ycb_mesh(obj_name), np.array(pos), np.array(orn), obj_name=obj_name)
+        base_exclusion_z = float(mesh_t.vertices[:, 2].min()) + BASE_EXCLUSION_HEIGHT_M
         sample_surface_points_and_normals(
-            mesh_t, n_samples=3600, base_exclusion_z=env_temp.table_top_z + BASE_EXCLUSION_HEIGHT_M
+            mesh_t, n_samples=3600, base_exclusion_z=base_exclusion_z
         )
         env_temp.close()
 
@@ -116,8 +123,10 @@ def run_benchmark(obj_name: str, runs: int = 5, viz: bool = False):
     pos, orn = env._p.getBasePositionAndOrientation(env.obj_id, physicsClientId=env.client_id)
     mesh_world = transform_mesh(load_ycb_mesh(obj_name), np.array(pos), np.array(orn), obj_name=obj_name)
     triangles_world = np.asarray(mesh_world.vertices)[np.asarray(mesh_world.faces)]
+    env.obj_pos = np.array((mesh_world.bounds[0] + mesh_world.bounds[1]) / 2.0, dtype=np.float64)
+    base_exclusion_z = float(mesh_world.vertices[:, 2].min()) + BASE_EXCLUSION_HEIGHT_M
     surface_pts, surface_nrm = sample_surface_points_and_normals(
-        mesh_world, n_samples=3600, base_exclusion_z=env.table_top_z + BASE_EXCLUSION_HEIGHT_M
+        mesh_world, n_samples=3600, base_exclusion_z=base_exclusion_z
     )
     tracker = CoverageTracker(surface_pts, surface_nrm)
 

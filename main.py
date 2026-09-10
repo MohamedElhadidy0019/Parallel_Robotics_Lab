@@ -15,9 +15,13 @@ import numpy as np
 import open3d as o3d
 import torch
 
-# Suppress noisy library warnings (gymnasium box precision, torch arch list)
+# Suppress noisy library warnings (gymnasium box precision, torch arch list, rerun, deprecations)
+os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "7.5;8.0;8.6;8.9;9.0")
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", module="gymnasium")
+warnings.filterwarnings("ignore", module="torch")
+warnings.filterwarnings("ignore", module="rerun")
 
 from nbv_core.camera import (
     backproject_depth,
@@ -111,7 +115,8 @@ def run_nbv_scan(
         mesh_world = transform_mesh(mesh, np.array(pos), np.array(orn), obj_name=obj_name)
         triangles_world = np.asarray(mesh_world.vertices[mesh_world.faces], dtype=np.float32)
 
-        base_exclusion_z = env.table_top_z + BASE_EXCLUSION_HEIGHT_M
+        env.obj_pos = np.array((mesh_world.bounds[0] + mesh_world.bounds[1]) / 2.0, dtype=np.float64)
+        base_exclusion_z = float(mesh_world.vertices[:, 2].min()) + BASE_EXCLUSION_HEIGHT_M
         surface_pts, surface_nrm = sample_surface_points_and_normals(
             mesh_world, n_samples=n_surface_samples, base_exclusion_z=base_exclusion_z
         )

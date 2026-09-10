@@ -15,8 +15,18 @@ DEFAULT_BASE_EXCLUSION_MARGIN_M = 0.003
 
 
 def ycb_mesh_path(name: str) -> str:
-    """Resolve visual OBJ mesh path for a YCB object."""
+    """Resolve visual OBJ mesh path for a YCB object from URDF, with fallback."""
     obj_dir = os.path.join(YCB_ROOT, name)
+    urdf_path = os.path.join(obj_dir, "model.urdf")
+    if os.path.isfile(urdf_path):
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(urdf_path)
+        mesh_elem = tree.getroot().find(".//visual/geometry/mesh")
+        if mesh_elem is not None and "filename" in mesh_elem.attrib:
+            fname = mesh_elem.attrib["filename"]
+            p = os.path.join(obj_dir, fname) if not os.path.isabs(fname) else fname
+            if os.path.isfile(p):
+                return p
     for cand in ("textured_simple_reoriented.obj", "textured.obj"):
         p = os.path.join(obj_dir, cand)
         if os.path.isfile(p):
@@ -39,7 +49,7 @@ def transform_mesh(
     orn_inertial_xyzw: np.ndarray,
     obj_name: str | None = None,
 ) -> trimesh.Trimesh:
-    """Transform visual mesh into world frame taking URDF inertial and visual origins into account."""
+    """Transform visual mesh into world frame taking URDF scale, inertial, and visual origins into account."""
     world_mesh = mesh.copy()
 
     T_link_ine = np.eye(4, dtype=np.float64)
@@ -50,6 +60,11 @@ def transform_mesh(
         if os.path.isfile(urdf_path):
             import xml.etree.ElementTree as ET
             tree = ET.parse(urdf_path)
+
+            mesh_elem = tree.getroot().find(".//visual/geometry/mesh")
+            if mesh_elem is not None and "scale" in mesh_elem.attrib:
+                scale = [float(x) for x in mesh_elem.attrib["scale"].split()]
+                world_mesh.apply_scale(scale)
 
             ine = tree.getroot().find(".//inertial/origin")
             if ine is not None:

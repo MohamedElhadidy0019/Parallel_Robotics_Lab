@@ -110,3 +110,18 @@ def test_coverage_colored_mesh():
     assert len(o3d_mesh.vertices) == len(mesh.vertices)
     assert len(o3d_mesh.triangles) == len(mesh.faces)
     assert len(o3d_mesh.vertex_colors) == len(mesh.vertices)
+
+
+def test_transform_mesh_applies_urdf_scale():
+    """Verify transform_mesh respects scale attributes declared in URDF."""
+    mesh_chips_raw = load_ycb_mesh("YcbChipsCan")
+    t_mesh_chips = transform_mesh(mesh_chips_raw, np.zeros(3), np.array([0, 0, 0, 1]), obj_name="YcbChipsCan")
+    assert np.isclose(t_mesh_chips.extents[0], mesh_chips_raw.extents[0] * 0.95, atol=1e-4)
+    assert np.isclose(t_mesh_chips.extents[1], mesh_chips_raw.extents[1] * 0.95, atol=1e-4)
+    assert np.isclose(t_mesh_chips.extents[2], mesh_chips_raw.extents[2] * 1.0, atol=1e-4)
+
+    mesh_chef_raw = load_ycb_mesh("YcbMasterChefCan")
+    t_mesh_chef = transform_mesh(mesh_chef_raw, np.zeros(3), np.array([0, 0, 0, 1]), obj_name="YcbMasterChefCan")
+    assert np.isclose(t_mesh_chef.extents[0], mesh_chef_raw.extents[0] * 0.7, atol=1e-4)
+    assert np.isclose(t_mesh_chef.extents[1], mesh_chef_raw.extents[1] * 0.7, atol=1e-4)
+    assert np.isclose(t_mesh_chef.extents[2], mesh_chef_raw.extents[2] * 0.7, atol=1e-4)

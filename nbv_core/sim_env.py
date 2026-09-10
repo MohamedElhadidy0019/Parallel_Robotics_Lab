@@ -178,9 +178,8 @@ class SimEnv(RobotEnv):
             self.obj_id, [x, y, pos[2] + (self.table_top_z - lo[2])], orn, physicsClientId=self.client_id
         )
         self._settle()
-        self.obj_pos = np.array(
-            self._p.getBasePositionAndOrientation(self.obj_id, physicsClientId=self.client_id)[0]
-        )
+        lo, hi = self._p.getAABB(self.obj_id, physicsClientId=self.client_id)
+        self.obj_pos = np.array((np.array(lo) + np.array(hi)) / 2.0, dtype=np.float64)
 
     # --- arm motion -----------------------------------------------------------
 
