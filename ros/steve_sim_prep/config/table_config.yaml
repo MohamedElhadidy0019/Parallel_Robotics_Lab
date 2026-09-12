@@ -1,0 +1,29 @@
+# Inspection Table Configuration
+# Defines table geometry, dimensions, and default spawn placement in Gazebo.
+
+table:
+  # Shape type: "rectangle", "circular", or "square"
+  shape: "rectangle"
+
+  # Height from ground to top surface (meters) 
+  height: 0.70
+
+  # Tabletop thickness (meters)
+  thickness: 0.04
+
+  # Shape-specific dimensions (meters):
+  depth: 0.50      # Along X axis (used if shape is "rectangle")
+  width: 0.80      # Along Y axis (used if shape is "rectangle")
+  size: 0.60       # Side length (used if shape is "square")
+  radius: 0.30     # Radius (used if shape is "circular")
+
+  # Table surface material in Gazebo
+  material: "Gazebo/WoodFloor"
+
+  # Default spawn pose in Gazebo world frame
+  # (Can be overridden at launch via table_x, table_y, table_z, table_yaw)
+  default_pose:
+    x: 0.00
+    y: 1.00
+    z: 0.00
+    yaw: 90.0  # in degrees

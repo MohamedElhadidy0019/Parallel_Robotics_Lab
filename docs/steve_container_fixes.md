@@ -110,6 +110,37 @@ In `/home/ws/src/neo_simulation2/components/arm/robotiq_gripper.urdf.xacro`, rep
 
 ---
 
+### 3.1 Set Default Arm Type & Custom Spawn Coordinates in Simulation Bringup
+
+In `/home/ws/src/neo_simulation2/launch/simulation.launch.py`:
+
+1. Set `arm_type` default to `'ur5'` (spawns UR5 arm, cabinet, gripper, and wrist camera automatically):
+```python
+declare_arm_type_cmd = DeclareLaunchArgument(
+    'arm_type', default_value='ur5',
+    description='Available arms: "ur5", "ur10", "ur5e", "ur10e"'
+)
+```
+
+2. Add optional initial robot spawn coordinate arguments (`spawn_x`, `spawn_y`, `spawn_z`, `spawn_yaw`):
+```python
+# In generate_launch_description:
+declare_spawn_x_cmd = DeclareLaunchArgument('spawn_x', default_value='0.0', description='Robot spawn X')
+declare_spawn_y_cmd = DeclareLaunchArgument('spawn_y', default_value='0.0', description='Robot spawn Y')
+declare_spawn_z_cmd = DeclareLaunchArgument('spawn_z', default_value='0.0', description='Robot spawn Z')
+declare_spawn_yaw_cmd = DeclareLaunchArgument('spawn_yaw', default_value='0.0', description='Robot spawn Yaw (rad)')
+
+# Pass to spawn_entity node:
+arguments=['-entity', my_neo_robot, '-topic', '/robot_description',
+           '-x', spawn_x, '-y', spawn_y, '-z', spawn_z, '-Y', spawn_yaw]
+```
+
+#### Why:
+* Neobotix upstream defaults `arm_type` to empty (`''`), spawning only the bare mobile platform if omitted.
+* Enables setting the robot's initial spawn location anywhere in the Gazebo world at launch time without breaking physics or `/odom` odometry.
+
+---
+
 ## 4. Build Workspace
 
 Compile all 20 packages (ignoring unused Nav2 2D base navigation plugins):
@@ -135,7 +166,7 @@ source /home/ws/install/setup.bash
 
 ### Launch Gazebo Simulation (MPO-700 + UR5)
 ```bash
-ros2 launch neo_simulation2 simulation.launch.py my_robot:=mpo_700 world:=neo_workshop arm_type:=ur5
+ros2 launch neo_simulation2 simulation.launch.py spawn_x:=0.0 spawn_y:=0.4 spawn_yaw:=0.0
 ```
 
 ### Launch Real Robot Bringup

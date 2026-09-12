@@ -9,21 +9,21 @@
     <visual>
       <origin xyz="0 0 0.2" rpy="0 0 0"/>
       <geometry>
-        <box size="0.9 1.2 0.4"/>
+        <box size="0.6 0.9 0.4"/>
       </geometry>
-      <material name="table_gray">
-        <color rgba="0.7 0.7 0.75 1.0"/>
+      <material name="table_wood">
+        <color rgba="0.8 0.6 0.4 1.0"/>
       </material>
     </visual>
     <collision>
       <origin xyz="0 0 0.2" rpy="0 0 0"/>
       <geometry>
-        <box size="0.9 1.2 0.4"/>
+        <box size="0.6 0.9 0.4"/>
       </geometry>
     </collision>
   </link>
   <gazebo reference="table_link">
-    <material>Gazebo/Grey</material>
+    <material>Gazebo/WoodFloor</material>
   </gazebo>
   <gazebo>
     <static>true</static>
