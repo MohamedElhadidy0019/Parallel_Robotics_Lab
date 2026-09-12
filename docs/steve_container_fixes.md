@@ -178,3 +178,40 @@ ros2 launch neo_mpo_700-2 bringup.launch.py arm_type:=ur5 gripper_type:=2f_85 d4
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
+
+---
+
+## 6. GPU Accelerated Inspection Stack (CUDA 12.1, PyTorch & cuRobo)
+
+Run inside the container to equip Steve with full GPU motion planning, cuRobo kinematics, and custom CUDA ray scoring:
+
+```bash
+# 1. NVIDIA CUDA 12.1 NVCC Compiler (no host kernel driver conflict in Docker)
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install -y --no-install-recommends cuda-nvcc-12-1 cuda-cudart-dev-12-1
+sudo ln -sf /usr/local/cuda-12.1 /usr/local/cuda
+sudo ln -sf /usr/local/cuda-12.1/bin/nvcc /usr/local/bin/nvcc
+
+# Environment variables
+echo 'export CUDA_HOME=/usr/local/cuda' | sudo tee /etc/profile.d/cuda.sh
+echo 'export PATH=/usr/local/cuda/bin:$PATH' | sudo tee -a /etc/profile.d/cuda.sh
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' | sudo tee -a /etc/profile.d/cuda.sh
+source /etc/profile.d/cuda.sh
+
+# 2. PyTorch, Warp, & 3D Geometry Libraries
+pip install --upgrade pip
+pip install torch==2.4.1+cu121 torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install "numpy<2.0" ninja warp-lang trimesh open3d rerun-sdk
+
+# 3. Build & Install cuRobo with Native CUDA Kernels
+git clone https://github.com/NVlabs/curobo.git /tmp/curobo
+cd /tmp/curobo
+export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
+pip install --no-build-isolation -e .
+
+# 4. Verify Stack
+python3 -c "import torch; print('PyTorch CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python3 -c "import curobo; print('cuRobo:', curobo.__version__)"
+```

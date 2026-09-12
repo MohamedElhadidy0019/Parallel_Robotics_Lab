@@ -13,23 +13,6 @@ from ament_index_python.packages import get_package_share_directory
 from steve_sim_prep.asset_manager import AssetManager
 from steve_sim_prep.table_generator import generate_table_urdf
 
-def quaternion_from_euler(ai, aj, ak):
-    ai /= 2.0
-    aj /= 2.0
-    ak /= 2.0
-    ci = math.cos(ai)
-    si = math.sin(ai)
-    cj = math.cos(aj)
-    sj = math.sin(aj)
-    ck = math.cos(ak)
-    sk = math.sin(ak)
-    return [
-        cj * sc - sj * cs if (sc := si * ck) or True else 0,
-        cj * ss + sj * cc if (ss := si * sk) and (cc := ci * ck) or True else 0,
-        cj * cs - sj * sc if (cs := ci * sk) or True else 0,
-        cj * cc + sj * ss
-    ]
-
 def euler_to_quaternion(roll, pitch, yaw):
     cy = math.cos(yaw * 0.5)
     sy = math.sin(yaw * 0.5)
@@ -73,8 +56,9 @@ class SteveSimPreparer(Node):
         self.declare_parameter("table_z", float("nan"))
         self.declare_parameter("table_yaw", float("nan"))
 
-        # 4. Target object parameters
+        # 4. Target object & asset parameters
         self.declare_parameter("object_name", "mustard_bottle")
+        self.declare_parameter("assets_dir", "")
         self.declare_parameter("object_x", float("nan"))
         self.declare_parameter("object_y", float("nan"))
         self.declare_parameter("object_z", float("nan"))
@@ -83,7 +67,9 @@ class SteveSimPreparer(Node):
         self.spawn_cli = self.create_client(SpawnEntity, "/spawn_entity")
         self.del_cli = self.create_client(DeleteEntity, "/delete_entity")
         self.tf_broadcaster = StaticTransformBroadcaster(self)
-        self.asset_mgr = AssetManager(logger=self.get_logger())
+        
+        assets_dir = self.get_parameter("assets_dir").get_parameter_value().string_value
+        self.asset_mgr = AssetManager(assets_dir=assets_dir or None, logger=self.get_logger())
 
     def load_config(self):
         config_path = self.get_parameter("config_file").get_parameter_value().string_value
@@ -235,6 +221,23 @@ def main():
     rclpy.init()
     node = SteveSimPreparer()
 
+    obj_name_param = node.get_parameter("object_name").get_parameter_value().string_value.strip()
+
+    # Handle object list query
+    if obj_name_param.lower() in ["list", "help", "--help"]:
+        print("\n=======================================================")
+        print("          STEVE SIM PREP - AVAILABLE OBJECTS           ")
+        print("=======================================================")
+        for obj in node.asset_mgr.list_available_objects():
+            print(f"  * {obj}")
+        print("\nUsage example:")
+        print("  ros2 launch steve_sim_prep prepare_sim.launch.py object_name:=chips_can")
+        print("  ros2 launch steve_sim_prep prepare_sim.launch.py object_name:=cracker_box")
+        print("=======================================================\n")
+        node.destroy_node()
+        rclpy.shutdown()
+        return
+
     if not node.wait_for_gazebo():
         sys.exit(1)
 
@@ -246,24 +249,39 @@ def main():
     )
 
     # 2. Resolve target object
-    obj_name_param = node.get_parameter("object_name").get_parameter_value().string_value
     p_ox = node.get_parameter("object_x").get_parameter_value().double_value
     p_oy = node.get_parameter("object_y").get_parameter_value().double_value
     p_oz = node.get_parameter("object_z").get_parameter_value().double_value
 
     entity_name, obj_urdf, z_offset = node.asset_mgr.resolve_object(obj_name_param)
 
-    # Auto-align target on table top if coordinates are not explicitly passed
+    # Auto-align target on table top with 5mm landing clearance
     obj_x = p_ox if not math.isnan(p_ox) else t_cfg["x"]
     obj_y = p_oy if not math.isnan(p_oy) else t_cfg["y"]
-    obj_z = p_oz if not math.isnan(p_oz) else (t_cfg["z"] + t_cfg["height"] + z_offset + 0.01)
+    obj_z = p_oz if not math.isnan(p_oz) else (t_cfg["z"] + t_cfg["height"] + z_offset + 0.005)
 
     # 3. Clean-first: delete existing entities so re-running is always seamless
     node.get_logger().info("=== Cleaning any previous inspection entities ===")
-    node.delete_entity("inspection_table")
-    node.delete_entity("target_object")
-    node.delete_entity("mustard_bottle")
-    node.delete_entity("YcbMustardBottle")
+    cleanup_entities = [
+        "inspection_table",
+        "target_object",
+        entity_name,
+        "mustard_bottle",
+        "YcbMustardBottle",
+        "YcbChipsCan",
+        "YcbCrackerBox",
+        "YcbGelatinBox",
+        "YcbMasterChefCan",
+        "YcbOrionPie",
+        "YcbPottedMeatCan",
+        "YcbTomatoSoupCan",
+        "YcbBleachCleanser",
+        "Ycbsuger1",
+        "Ycbsuger2",
+        "Ycbsuger3",
+    ]
+    for ent in list(dict.fromkeys(cleanup_entities)):
+        node.delete_entity(ent)
     time.sleep(0.3)
 
     # 4. Generate & Spawn Table
@@ -283,8 +301,13 @@ def main():
     time.sleep(0.3)
 
     # 5. Spawn Target Object
-    node.get_logger().info(f"=== Spawning Target Object [{obj_name_param}] on Table Top ===")
+    node.get_logger().info(f"=== Spawning Target Object [{entity_name}] on Table Top ===")
     node.spawn(entity_name, obj_urdf, x=obj_x, y=obj_y, z=obj_z)
+
+    # 6. Broadcast Unified TF Tree
+    # Connect Gazebo world to robot odom so camera and inspection points share a complete TF tree
+    node.publish_tf("world", "odom", 0.0, 0.0, 0.0)
+    node.publish_tf("world", "table_frame", t_cfg["x"], t_cfg["y"], t_cfg["z"], yaw=yaw_rad)
     node.publish_tf("world", "object_frame", obj_x, obj_y, obj_z)
 
     node.get_logger().info("=== Scene Preparation Complete! Spinning for TF broadcast ===")

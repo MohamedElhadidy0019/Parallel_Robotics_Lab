@@ -40,6 +40,12 @@ def generate_launch_description():
     declare_obj_y = DeclareLaunchArgument("object_y", default_value="nan")
     declare_obj_z = DeclareLaunchArgument("object_z", default_value="nan")
 
+    declare_assets_dir = DeclareLaunchArgument(
+        "assets_dir",
+        default_value="",
+        description="Path to CAD/URDF assets directory (e.g. ycb_objects)"
+    )
+
     preparer_node = Node(
         package="steve_sim_prep",
         executable="preparer_node",
@@ -48,6 +54,7 @@ def generate_launch_description():
         parameters=[{
             "config_file": LaunchConfiguration("config_file"),
             "object_name": LaunchConfiguration("object_name"),
+            "assets_dir": LaunchConfiguration("assets_dir"),
             "table_x": LaunchConfiguration("table_x"),
             "table_y": LaunchConfiguration("table_y"),
             "table_z": LaunchConfiguration("table_z"),
@@ -64,6 +71,7 @@ def generate_launch_description():
     return LaunchDescription([
         declare_config_file,
         declare_obj,
+        declare_assets_dir,
         declare_table_x,
         declare_table_y,
         declare_table_z,
