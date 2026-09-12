@@ -117,7 +117,7 @@ def test_ik_joints_put_the_camera_where_promised():
 
 def test_motion_planner_reaches_a_reachable_candidate():
     """The full loop: IK → plan → execute → camera lands on the target."""
-    from nbv_planner.motion_planning import move_camera_to
+    from sim.env import move_camera_to
 
     env = SimEnv(render=False)
     try:
@@ -163,7 +163,7 @@ def show() -> None:
     """Live view: IK → motion-plan to a reachable candidate, then run the test suite."""
     import time
 
-    from nbv_planner.motion_planning import move_camera_to
+    from sim.env import move_camera_to
 
     env = SimEnv(render=True, ycb_object=sys.argv[2] if len(sys.argv) > 2 else "YcbMustardBottle")
     cid = env.client_id

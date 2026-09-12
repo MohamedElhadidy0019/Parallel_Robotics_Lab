@@ -1,6 +1,7 @@
 CUDA_Lab_Assignments/
 *.png
 *.pyc
+__pycache__/
 *.npy
 *.obj
 *.mtl

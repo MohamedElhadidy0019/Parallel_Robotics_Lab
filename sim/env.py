@@ -1,6 +1,7 @@
 """Simulation environment for Steve mobile manipulator, inspection table, and YCB objects."""
 
 import os
+import time
 from typing import Any, Sequence
 
 import contextlib
@@ -178,6 +179,26 @@ class SteveSimEnv:
             return np.asarray(st[0], dtype=float)
         return self.base_pose()[0] + np.array([0.158, 0.0, 0.766])
 
+    def current_arm_joints(self) -> np.ndarray:
+        """Current joint angles for the 6 UR5 arm joints."""
+        return np.array(
+            [self._p.getJointState(self.robot_id, i, physicsClientId=self.client_id)[0]
+             for i in self.arm_joint_indices],
+            dtype=np.float32,
+        )
+
+    def object_pose_and_dims(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """World position, orientation (xyzw), and bounding box extents of target object."""
+        pos, orn = self._p.getBasePositionAndOrientation(self.obj_id, physicsClientId=self.client_id)
+        lo, hi = self._p.getAABB(self.obj_id, physicsClientId=self.client_id)
+        dims = np.asarray(hi, dtype=float) - np.asarray(lo, dtype=float)
+        return np.asarray(pos, dtype=float), np.asarray(orn, dtype=float), dims
+
+    def camera_world_pos(self) -> np.ndarray:
+        """Current world position of camera link."""
+        st = self._p.getLinkState(self.robot_id, self.camera_link, physicsClientId=self.client_id)
+        return np.asarray(st[0], dtype=float)
+
     def max_reach(self) -> float:
         """Nominal reach of the UR5 arm."""
         return 0.85
@@ -276,19 +297,81 @@ class SteveSimEnv:
 
     def execute_trajectory(
         self,
-        joint_positions_list: Sequence[np.ndarray],
+        joint_positions_list: Sequence[Sequence[float]] | np.ndarray,
         visualizer: Any = None,
-    ) -> None:
-        """Execute a planned joint trajectory smoothly."""
-        for q in joint_positions_list:
-            for idx, val in zip(self.arm_joint_indices, q):
-                self._p.resetJointState(self.robot_id, idx, float(val))
-            self._p.stepSimulation()
-            if visualizer is not None:
+    ) -> tuple[np.ndarray, float]:
+        """Execute a planned joint trajectory smoothly in PyBullet and settle physics.
+
+        Returns:
+            (achieved_camera_world_pos, execution_duration_ms)
+        """
+        t_exec_0 = time.perf_counter()
+        for step in joint_positions_list:
+            self.execute_joint_states(step if isinstance(step, list) else step.tolist(), absolute=True)
+            if getattr(self, "render", False):
+                time.sleep(1.0 / 120.0)
+            if visualizer is not None and getattr(visualizer, "enabled", False):
                 visualizer.update_robot_pose(self)
+                if not getattr(self, "render", False):
+                    time.sleep(1.0 / 120.0)
+
+        self._wait_for_arm_at_rest()
+        last_step = joint_positions_list[-1]
+        self._snap_to_joint_targets(last_step if isinstance(last_step, list) else last_step.tolist())
+        if visualizer is not None and getattr(visualizer, "enabled", False):
+            visualizer.update_robot_pose(self)
+        exec_ms = (time.perf_counter() - t_exec_0) * 1000.0
+
+        return self.camera_world_pos(), exec_ms
 
     def close(self) -> None:
         """Disconnect PyBullet session."""
         if self._p.isConnected(self.client_id):
             with _suppress_c_output():
                 self._p.disconnect(self.client_id)
+
+
+def move_camera_to(
+    env: SteveSimEnv,
+    t_target_world: np.ndarray,
+    q_target_world: np.ndarray,
+    visualizer: Any = None,
+    return_timing: bool = False,
+) -> tuple:
+    """Convenience simulation helper: plan and execute motion to a camera pose."""
+    from nbv_planner.config import MAX_POSE_ERROR_M
+    from nbv_planner.motion_planning import build_world_config, plan_motion_single
+
+    t_base, q_base = env.base_pose()
+    t_obj, q_obj, obj_dims = env.object_pose_and_dims()
+    lo, hi = getattr(env, "table_aabb", (None, None))
+    world_cfg = build_world_config(
+        t_base_world=t_base,
+        q_base_world_xyzw=q_base,
+        table_lo=lo,
+        table_hi=hi,
+        t_obj_world=t_obj,
+        q_obj_world_xyzw=q_obj,
+        obj_dims=obj_dims,
+    )
+    ok, traj, opt_ms = plan_motion_single(
+        t_target_world=np.asarray(t_target_world),
+        q_target_world=np.asarray(q_target_world),
+        current_joints=env.current_arm_joints(),
+        t_base_world=t_base,
+        q_base_world_xyzw=q_base,
+        world_config=world_cfg,
+        arm_joint_names=env.arm_joint_names,
+    )
+    if not ok or traj is None:
+        t_now = env.camera_world_pos()
+        if return_timing:
+            return False, t_now, opt_ms, 0.0
+        return False, t_now
+
+    t_achieved, exec_ms = env.execute_trajectory(traj, visualizer=visualizer)
+    err = float(np.linalg.norm(t_achieved - np.asarray(t_target_world)))
+    reached = err <= MAX_POSE_ERROR_M
+    if return_timing:
+        return reached, t_achieved, opt_ms, exec_ms
+    return reached, t_achieved

@@ -57,6 +57,7 @@ from nbv_planner.config import (
     BASE_LINK,
     DEFAULT_YCB_OBJECT,
     EE_LINK,
+    MAX_POSE_ERROR_M,
     N_AZIMUTH,
     N_RADIUS,
     ROBOT_SELF_FILTER_MIN_DEPTH_M,
@@ -73,7 +74,7 @@ from nbv_planner.coverage import (
     sample_surface_points_and_normals,
     transform_mesh,
 )
-from nbv_planner.motion_planning import move_camera_to_batch
+from nbv_planner.motion_planning import build_world_config, plan_motion_batch
 from nbv_planner.ray_scoring import score_candidate_views
 from nbv_planner.reachability import ik_filter, sample_candidate_camera_poses
 from nbv_planner.viz import NBVVisualizer
@@ -183,6 +184,19 @@ def run_nbv_scan(
         visited = np.zeros(len(t_cand), dtype=bool)
         views_executed = 0
 
+        # Construct cuRobo collision world using scene geometry from env
+        t_obj, q_obj, obj_dims = env.object_pose_and_dims()
+        lo, hi = getattr(env, "table_aabb", (None, None))
+        world_cfg = build_world_config(
+            t_base_world=t_base,
+            q_base_world_xyzw=q_base,
+            table_lo=lo,
+            table_hi=hi,
+            t_obj_world=t_obj,
+            q_obj_world_xyzw=q_obj,
+            obj_dims=obj_dims,
+        )
+
         while views_executed < max_views:
             cov_current = tracker.coverage_fraction()
             if cov_current >= target_coverage:
@@ -223,19 +237,38 @@ def run_nbv_scan(
             target_t = t_cand[top_cand_indices]
             target_q = q_cand[top_cand_indices]
 
-            ok, t_achieved, best_k, opt_ms, exec_ms = move_camera_to_batch(
-                env, target_t, target_q, visualizer=visualizer, return_timing=True
+            # Plan collision-free trajectory using cuRobo on GPU
+            ok, best_k, trajectory, opt_ms = plan_motion_batch(
+                t_targets_world=target_t,
+                q_targets_world=target_q,
+                current_joints=env.current_arm_joints(),
+                t_base_world=t_base,
+                q_base_world_xyzw=q_base,
+                world_config=world_cfg,
+                arm_joint_names=env.arm_joint_names,
+                enable_graph=True,
             )
             visualizer.update_view_stage("cuRobo Batch Opt", "DONE", opt_ms)
+            visualizer.update_view_stage("Arm Waypoint Drive (120Hz)", "RUNNING")
+
+            if ok and trajectory is not None:
+                t_achieved, exec_ms = env.execute_trajectory(trajectory, visualizer=visualizer)
+                err = float(np.linalg.norm(t_achieved - target_t[best_k]))
+                reached = err <= MAX_POSE_ERROR_M
+            else:
+                t_achieved = env.camera_world_pos()
+                exec_ms = 0.0
+                reached = False
+
             visualizer.update_view_stage("Arm Waypoint Drive (120Hz)", "DONE", exec_ms)
             visualizer.update_view_stage("RGB-D Camera Capture", "RUNNING")
 
             # Mark evaluated candidates as visited
-            num_to_mark = best_k + 1 if ok else len(top_cand_indices)
+            num_to_mark = best_k + 1 if reached else len(top_cand_indices)
             for c_idx in top_cand_indices[:num_to_mark]:
                 visited[c_idx] = True
 
-            if not ok:
+            if not reached:
                 print("      Top batch candidates blocked by table collision, trying next candidates...")
                 continue
 

@@ -9,8 +9,9 @@ from nbv_planner.camera import (
 from nbv_planner.coverage import CoverageTracker
 from nbv_planner.motion_planning import (
     TrajectoryPlan,
-    move_camera_to,
-    move_camera_to_batch,
+    build_world_config,
+    plan_motion_batch,
+    plan_motion_single,
 )
 from nbv_planner.ray_scoring import score_candidate_views
 from nbv_planner.reachability import ik_filter, sample_candidate_camera_poses
@@ -23,9 +24,10 @@ __all__ = [
     "NBVVisualizer",
     "TrajectoryPlan",
     "backproject_depth",
+    "build_world_config",
     "ik_filter",
-    "move_camera_to",
-    "move_camera_to_batch",
+    "plan_motion_batch",
+    "plan_motion_single",
     "sample_candidate_camera_poses",
     "score_candidate_views",
     "transform_points",
