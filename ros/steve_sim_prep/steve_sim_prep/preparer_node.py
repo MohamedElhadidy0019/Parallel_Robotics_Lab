@@ -9,6 +9,7 @@ from rclpy.node import Node
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from geometry_msgs.msg import TransformStamped
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
+from tf2_ros.transform_broadcaster import TransformBroadcaster
 from ament_index_python.packages import get_package_share_directory
 from steve_sim_prep.asset_manager import AssetManager
 from steve_sim_prep.table_generator import generate_table_urdf
@@ -67,6 +68,9 @@ class SteveSimPreparer(Node):
         self.spawn_cli = self.create_client(SpawnEntity, "/spawn_entity")
         self.del_cli = self.create_client(DeleteEntity, "/delete_entity")
         self.tf_broadcaster = StaticTransformBroadcaster(self)
+        self.dynamic_tf_broadcaster = TransformBroadcaster(self)
+        self.active_transforms = []
+        self.tf_timer = None
         
         assets_dir = self.get_parameter("assets_dir").get_parameter_value().string_value
         self.asset_mgr = AssetManager(assets_dir=assets_dir or None, logger=self.get_logger())
@@ -199,7 +203,7 @@ class SteveSimPreparer(Node):
             self.get_logger().warn(f"Spawn [{name}] failed: {msg}")
             return False
 
-    def publish_tf(self, parent, child, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
+    def add_tf(self, parent, child, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = parent
@@ -214,8 +218,20 @@ class SteveSimPreparer(Node):
         t.transform.rotation.z = float(q[2])
         t.transform.rotation.w = float(q[3])
 
-        self.tf_broadcaster.sendTransform(t)
-        self.get_logger().info(f"Broadcasted TF: {parent} -> {child}")
+        self.active_transforms.append(t)
+        self.get_logger().info(f"Registered TF: {parent} -> {child}")
+
+    def broadcast_all_tf(self):
+        now = self.get_clock().now().to_msg()
+        for t in self.active_transforms:
+            t.header.stamp = now
+        if self.active_transforms:
+            self.tf_broadcaster.sendTransform(self.active_transforms)
+            self.dynamic_tf_broadcaster.sendTransform(self.active_transforms)
+
+    def publish_tf(self, parent, child, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
+        self.add_tf(parent, child, x, y, z, roll, pitch, yaw)
+        self.broadcast_all_tf()
 
 def main():
     rclpy.init()
@@ -306,9 +322,11 @@ def main():
 
     # 6. Broadcast Unified TF Tree
     # Connect Gazebo world to robot odom so camera and inspection points share a complete TF tree
-    node.publish_tf("world", "odom", 0.0, 0.0, 0.0)
-    node.publish_tf("world", "table_frame", t_cfg["x"], t_cfg["y"], t_cfg["z"], yaw=yaw_rad)
-    node.publish_tf("world", "object_frame", obj_x, obj_y, obj_z)
+    node.add_tf("world", "odom", 0.0, 0.0, 0.0)
+    node.add_tf("world", "table_frame", t_cfg["x"], t_cfg["y"], t_cfg["z"], yaw=yaw_rad)
+    node.add_tf("world", "object_frame", obj_x, obj_y, obj_z)
+    node.broadcast_all_tf()
+    node.tf_timer = node.create_timer(0.1, node.broadcast_all_tf)
 
     node.get_logger().info("=== Scene Preparation Complete! Spinning for TF broadcast ===")
 

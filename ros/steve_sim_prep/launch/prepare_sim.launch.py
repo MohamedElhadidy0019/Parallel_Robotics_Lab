@@ -46,12 +46,19 @@ def generate_launch_description():
         description="Path to CAD/URDF assets directory (e.g. ycb_objects)"
     )
 
+    declare_use_sim_time = DeclareLaunchArgument(
+        "use_sim_time",
+        default_value="true",
+        description="Use simulation (Gazebo) clock if true"
+    )
+
     preparer_node = Node(
         package="steve_sim_prep",
         executable="preparer_node",
         name="steve_sim_preparer",
         output="screen",
         parameters=[{
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
             "config_file": LaunchConfiguration("config_file"),
             "object_name": LaunchConfiguration("object_name"),
             "assets_dir": LaunchConfiguration("assets_dir"),
@@ -69,6 +76,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_use_sim_time,
         declare_config_file,
         declare_obj,
         declare_assets_dir,

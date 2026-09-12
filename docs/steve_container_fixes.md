@@ -166,7 +166,7 @@ source /home/ws/install/setup.bash
 
 ### Launch Gazebo Simulation (MPO-700 + UR5)
 ```bash
-ros2 launch neo_simulation2 simulation.launch.py spawn_x:=0.0 spawn_y:=0.4 spawn_yaw:=0.0
+ros2 launch neo_simulation2 simulation.launch.py spawn_x:=-1.5 spawn_y:=-0.5 spawn_yaw:=0.0
 ```
 
 ### Launch Real Robot Bringup
