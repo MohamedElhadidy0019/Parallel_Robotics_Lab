@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<robot name="inspection_table">
+  <link name="table_link">
+    <inertial>
+      <mass value="50.0"/>
+      <origin xyz="0 0 0.2" rpy="0 0 0"/>
+      <inertia ixx="3.0" ixy="0" ixz="0" iyy="3.0" iyz="0" izz="5.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.2" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.9 1.2 0.4"/>
+      </geometry>
+      <material name="table_gray">
+        <color rgba="0.7 0.7 0.75 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.2" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.9 1.2 0.4"/>
+      </geometry>
+    </collision>
+  </link>
+  <gazebo reference="table_link">
+    <material>Gazebo/Grey</material>
+  </gazebo>
+  <gazebo>
+    <static>true</static>
+  </gazebo>
+</robot>
