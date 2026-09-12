@@ -78,7 +78,7 @@ class AssetManager:
                 content = f.read()
             content = content.replace('package://steve_gazebo_inspection/models/ycb_objects/mustard_bottle', model_dir)
             content = content.replace('package://steve_sim_prep/models/ycb_objects/mustard_bottle', model_dir)
-            return ('YcbMustardBottle', content, 0.45)
+            return ('YcbMustardBottle', content, 0.10)
 
         # 2. Shelf Gym Assets
         shelf_gym_dir = self.ensure_shelf_gym()

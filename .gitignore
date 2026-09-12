@@ -6,6 +6,7 @@ CUDA_Lab_Assignments/
 *.mtl
 *.ply
 *.npz
+!ros/steve_sim_prep/models/**
 captures/
 uv.lock
 build/

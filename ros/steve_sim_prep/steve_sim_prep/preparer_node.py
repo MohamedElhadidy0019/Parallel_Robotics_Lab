@@ -245,16 +245,18 @@ def main():
         f"thickness={t_cfg['thickness']}m, pose=({t_cfg['x']:.2f}, {t_cfg['y']:.2f}, {t_cfg['z']:.2f}, yaw={t_cfg['yaw']:.1f} deg)"
     )
 
-    # 2. Resolve target object parameters
+    # 2. Resolve target object
     obj_name_param = node.get_parameter("object_name").get_parameter_value().string_value
     p_ox = node.get_parameter("object_x").get_parameter_value().double_value
     p_oy = node.get_parameter("object_y").get_parameter_value().double_value
     p_oz = node.get_parameter("object_z").get_parameter_value().double_value
 
+    entity_name, obj_urdf, z_offset = node.asset_mgr.resolve_object(obj_name_param)
+
     # Auto-align target on table top if coordinates are not explicitly passed
     obj_x = p_ox if not math.isnan(p_ox) else t_cfg["x"]
     obj_y = p_oy if not math.isnan(p_oy) else t_cfg["y"]
-    obj_z = p_oz if not math.isnan(p_oz) else (t_cfg["z"] + t_cfg["height"] + 0.005)
+    obj_z = p_oz if not math.isnan(p_oz) else (t_cfg["z"] + t_cfg["height"] + z_offset + 0.01)
 
     # 3. Clean-first: delete existing entities so re-running is always seamless
     node.get_logger().info("=== Cleaning any previous inspection entities ===")
@@ -280,9 +282,8 @@ def main():
     node.spawn("inspection_table", table_urdf, x=t_cfg["x"], y=t_cfg["y"], z=t_cfg["z"], yaw=yaw_rad)
     time.sleep(0.3)
 
-    # 5. Resolve & Spawn Target Object
+    # 5. Spawn Target Object
     node.get_logger().info(f"=== Spawning Target Object [{obj_name_param}] on Table Top ===")
-    entity_name, obj_urdf, z_offset = node.asset_mgr.resolve_object(obj_name_param)
     node.spawn(entity_name, obj_urdf, x=obj_x, y=obj_y, z=obj_z)
     node.publish_tf("world", "object_frame", obj_x, obj_y, obj_z)
 
