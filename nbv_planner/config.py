@@ -18,6 +18,18 @@ FINETUNE_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_planner/curobo_config
 
 DEFAULT_YCB_OBJECT = "YcbMustardBottle"
 
+
+def ycb_urdf(name: str) -> str:
+    """Path to a vendored YCB object's URDF."""
+    return os.path.join(YCB_ROOT, name, "model.urdf")
+
+
+def ycb_names() -> list[str]:
+    """Every vendored object that ships a URDF."""
+    if not os.path.isdir(YCB_ROOT):
+        return [DEFAULT_YCB_OBJECT]
+    return sorted(d for d in os.listdir(YCB_ROOT) if os.path.isfile(ycb_urdf(d)))
+
 # -- Robot link names ---------------------------------------------------------
 
 BASE_LINK = "base_link"
@@ -32,7 +44,7 @@ ELEVATION_DEG = (20.0, 55.0, 3)  # min, max, count
 # -- Camera look-at -----------------------------------------------------------
 
 WORLD_UP_Z           = np.array([0.0, 0.0, 1.0])
-WORLD_UP_Y_FALLBACK  = np.array([0.0, 1.0, 0.0])
+WORLD_UP_Y_FALLBACK  = np.array([0.0, -1.0, 0.0])
 NEAR_VERTICAL_COSINE = 0.99  # cos(~8 deg)
 
 # -- CuRobo IK ----------------------------------------------------------------
@@ -57,6 +69,15 @@ TABLE_CLEARANCE_M        = 0.12
 TABLE_COLLISION_HALF_HEIGHT = 0.15
 COLLISION_SPHERE_BUFFER_M = 0.015  # 15 mm: CuRobo robot link collision sphere inflation margin
 MOTION_PLAN_MAX_ATTEMPTS  = 4      # Trajectory optimization attempts per candidate
+
+# -- Start pose -----------------------------------------------------------------
+# Reached with cuRobo before the planner starts. Robot base frame (sim: base at world origin).
+# Default: camera ~0.4 m from the table placement spot at ~45 deg, so the object and table are in view.
+
+START_CAMERA_POSITION_BASE = (0.50, 0.0, 1.15)
+START_LOOK_AT_BASE         = (0.785, 0.0, 0.85)
+START_SAFETY_RADIUS_M      = 0.15   # box kept clear around the look-at point while the object is unknown
+START_ROTATION_TOL_RAD     = 0.05
 
 # -- Coverage target & base exclusion -----------------------------------------
 

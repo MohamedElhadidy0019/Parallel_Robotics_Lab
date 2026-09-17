@@ -1,6 +1,26 @@
 """Occlusion-aware ray casting and candidate viewpoint scoring using custom CUDA kernel."""
 
 import os
+import sys
+
+# Ensure CUDA and ninja paths are configured before importing PyTorch cpp_extension
+local_bin = os.path.expanduser("~/.local/bin")
+if os.path.isdir(local_bin) and local_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = f"{local_bin}:{os.environ.get('PATH', '')}"
+
+if "CUDA_HOME" not in os.environ:
+    for cand in ("/usr/local/cuda", "/usr/local/cuda-12.1", "/usr/local/cuda-12"):
+        if os.path.isdir(cand):
+            os.environ["CUDA_HOME"] = cand
+            break
+
+cuda_bin = os.path.join(os.environ.get("CUDA_HOME", "/usr/local/cuda"), "bin")
+if os.path.isdir(cuda_bin) and cuda_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = f"{cuda_bin}:{os.environ.get('PATH', '')}"
+
+if "TORCH_CUDA_ARCH_LIST" not in os.environ:
+    os.environ["TORCH_CUDA_ARCH_LIST"] = "7.5"
+
 import numpy as np
 import torch
 from torch.utils.cpp_extension import load

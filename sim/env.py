@@ -7,62 +7,28 @@ from typing import Any, Sequence
 import contextlib
 import numpy as np
 
-def silence_c_output():
-    """Route low-level C stdout and stderr to /dev/null while keeping Python sys.stdout / sys.stderr intact."""
-    import io
-    import sys
-
-    if getattr(sys, "_c_output_silenced", False):
-        return
-    try:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        real_out = os.dup(1)
-        real_err = os.dup(2)
-        sys.stdout = io.TextIOWrapper(open(real_out, "wb", buffering=0), encoding="utf-8", write_through=True)
-        sys.stderr = io.TextIOWrapper(open(real_err, "wb", buffering=0), encoding="utf-8", write_through=True)
-        null_fd = os.open(os.devnull, os.O_RDWR)
-        os.dup2(null_fd, 1)
-        os.dup2(null_fd, 2)
-        os.close(null_fd)
-        sys._c_output_silenced = True
-    except Exception:
-        pass
-
-
-silence_c_output()
-
-
 @contextlib.contextmanager
 def _suppress_c_output():
-    """Silence low-level C stdout and stderr (context manager wrapper)."""
-    silence_c_output()
     yield
 
 
 import pybullet as p
 import pybullet_data
 
-from sim.camera import capture_rgbd
+from sim.camera import capture_from_pose
+from nbv_planner.observations import Observation
+from scipy.spatial.transform import Rotation
 from nbv_planner.camera import CameraIntrinsics
 from nbv_planner.config import (
     DEFAULT_YCB_OBJECT,
     ORBIT_DEPTH_FRACTION,
     WORLD_UP_Z,
     YCB_ROOT,
+    ycb_names,
+    ycb_urdf,
 )
 from sim.config import SimConfig, TableConfig, SteveRobotConfig
 from sim.table import Table
-
-
-def ycb_urdf(name: str) -> str:
-    """Path to a vendored YCB object's URDF."""
-    return os.path.join(YCB_ROOT, name, "model.urdf")
-
-
-def ycb_names() -> list[str]:
-    """Every vendored object that ships a URDF."""
-    return sorted(d for d in os.listdir(YCB_ROOT) if os.path.isfile(ycb_urdf(d)))
 
 
 class SteveSimEnv:
@@ -80,21 +46,39 @@ class SteveSimEnv:
         self.ycb_object = ycb_object
         self.render = render
 
+        self.client_id = -1
+        self._p = p
+
         # Connect to PyBullet quietly
         connection_mode = p.GUI if render else p.DIRECT
         with _suppress_c_output():
-            self.client_id = p.connect(connection_mode)
-        self._p = p
+            cid = self._p.connect(connection_mode)
+        if cid is None or cid < 0:
+            raise ConnectionError(f"Failed to connect to PyBullet physics server (client_id={cid})")
+        self.client_id = cid
 
-        self._p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        self._p.setGravity(0, 0, self.config.gravity)
-        self._p.setTimeStep(1.0 / self.config.hz)
+        try:
+            self._p.setAdditionalSearchPath(pybullet_data.getDataPath())
+            self._p.setGravity(0, 0, self.config.gravity)
+            self._p.setTimeStep(1.0 / self.config.hz)
 
-        # Build world
-        self.plane_id = self._p.loadURDF("plane.urdf")
-        self._load_robot()
-        self.table = Table(self._p, self.config.table)
-        self._place_object()
+            # Build world
+            self.plane_id = self._p.loadURDF("plane.urdf")
+            self._load_robot()
+            self.table = Table(self._p, self.config.table)
+            self._place_object()
+        except BaseException as orig_exc:
+            try:
+                self.close()
+            except Exception as cleanup_exc:
+                orig_exc.cleanup_error = cleanup_exc
+                orig_exc.__context__ = cleanup_exc
+                if hasattr(orig_exc, "add_note"):
+                    try:
+                        orig_exc.add_note(f"SteveSimEnv cleanup failed during constructor abort: {cleanup_exc}")
+                    except Exception:
+                        pass
+            raise
 
     def _load_robot(self) -> None:
         """Load Steve URDF and configure joint indices."""
@@ -132,6 +116,10 @@ class SteveSimEnv:
             self.link_name_to_id.get("tool0", 0),
         )
         self.tool_tip_id = self.link_name_to_id.get("tool0", self.camera_link)
+        self.camera_visual_rgba = [
+            s[7] for s in self._p.getVisualShapeData(self.robot_id, physicsClientId=self.client_id)
+            if s[1] == self.camera_link
+        ]
 
         # Reset arm to ready pose
         self.reset_robot(self.config.robot.initial_arm_joints)
@@ -194,10 +182,16 @@ class SteveSimEnv:
         dims = np.asarray(hi, dtype=float) - np.asarray(lo, dtype=float)
         return np.asarray(pos, dtype=float), np.asarray(orn, dtype=float), dims
 
+    def camera_world_transform(self) -> np.ndarray:
+        state = self._p.getLinkState(self.robot_id, self.camera_link,
+                                    computeForwardKinematics=True, physicsClientId=self.client_id)
+        transform = np.eye(4)
+        transform[:3, :3] = Rotation.from_quat(state[5]).as_matrix()
+        transform[:3, 3] = state[4]
+        return transform
+
     def camera_world_pos(self) -> np.ndarray:
-        """Current world position of camera link."""
-        st = self._p.getLinkState(self.robot_id, self.camera_link, physicsClientId=self.client_id)
-        return np.asarray(st[0], dtype=float)
+        return self.camera_world_transform()[:3, 3].copy()
 
     def max_reach(self) -> float:
         """Nominal reach of the UR5 arm."""
@@ -259,15 +253,35 @@ class SteveSimEnv:
         lo_settled, hi_settled = self._p.getAABB(self.obj_id)
         self.obj_pos = (np.asarray(lo_settled) + np.asarray(hi_settled)) / 2.0
 
-    def capture_frame(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Capture RGB-D frame and camera pose from the eye-in-hand sensor."""
-        link_state = self._p.getLinkState(self.robot_id, self.camera_link)
-        t_cam = np.asarray(link_state[0], dtype=float)
+    def capture_observation(self) -> Observation:
+        transform = self.camera_world_transform()
+        # The optical frame sits inside the D435 housing mesh. A real sensor never sees its own
+        # housing, and TinyRenderer stalls for minutes rasterizing geometry around the eye.
+        for rgba in self.camera_visual_rgba:
+            self._p.changeVisualShape(self.robot_id, self.camera_link, rgbaColor=[*rgba[:3], 0.0],
+                                      physicsClientId=self.client_id)
+        try:
+            rgb, depth, _, _ = capture_from_pose(transform, self.intrinsics, self.client_id)
+        finally:
+            for rgba in self.camera_visual_rgba:
+                self._p.changeVisualShape(self.robot_id, self.camera_link, rgbaColor=list(rgba),
+                                          physicsClientId=self.client_id)
+        return Observation(rgb, depth, self.intrinsics, transform, time.monotonic())
 
-        rgb, depth_m, view_matrix, _ = capture_rgbd(
-            t_cam, self.obj_pos, WORLD_UP_Z, self.intrinsics, physics_client_id=self.client_id
-        )
-        return rgb, depth_m, view_matrix, t_cam
+    def capture_frame(self):
+        observation = self.capture_observation()
+        return observation.rgb, observation.depth_m, observation.view_matrix, observation.camera_position
+
+    def settle_arm(self, timeout_s=2.0, velocity_tolerance=0.01) -> bool:
+        deadline = time.monotonic() + timeout_s
+        stable = 0
+        while time.monotonic() < deadline:
+            self._p.stepSimulation(physicsClientId=self.client_id)
+            states = self._p.getJointStates(self.robot_id, self.arm_joint_indices, physicsClientId=self.client_id)
+            stable = stable + 1 if max(abs(state[1]) for state in states) < velocity_tolerance else 0
+            if stable >= 10:
+                return True
+        return False
 
     def get_joint_positions(self) -> np.ndarray:
         """Current joint angles of the UR5 arm."""
@@ -306,8 +320,12 @@ class SteveSimEnv:
             (achieved_camera_world_pos, execution_duration_ms)
         """
         t_exec_0 = time.perf_counter()
-        for step in joint_positions_list:
-            self.execute_joint_states(step if isinstance(step, list) else step.tolist(), absolute=True)
+        traj_arr = np.asarray(joint_positions_list)
+        if traj_arr.ndim == 3:
+            traj_arr = traj_arr[0]
+
+        for step in traj_arr:
+            self.execute_joint_states(step.tolist() if hasattr(step, "tolist") else list(step), absolute=True)
             if getattr(self, "render", False):
                 time.sleep(1.0 / 120.0)
             if visualizer is not None and getattr(visualizer, "enabled", False):
@@ -316,7 +334,7 @@ class SteveSimEnv:
                     time.sleep(1.0 / 120.0)
 
         self._wait_for_arm_at_rest()
-        last_step = joint_positions_list[-1]
+        last_step = traj_arr[-1]
         self._snap_to_joint_targets(last_step if isinstance(last_step, list) else last_step.tolist())
         if visualizer is not None and getattr(visualizer, "enabled", False):
             visualizer.update_robot_pose(self)
@@ -326,9 +344,32 @@ class SteveSimEnv:
 
     def close(self) -> None:
         """Disconnect PyBullet session."""
-        if self._p.isConnected(self.client_id):
-            with _suppress_c_output():
-                self._p.disconnect(self.client_id)
+        cid = getattr(self, "client_id", -1)
+        if cid is not None and cid >= 0:
+            pybullet_mod = getattr(self, "_p", p)
+            try:
+                if not pybullet_mod.isConnected(physicsClientId=cid):
+                    self.client_id = -1
+                    return
+            except Exception:
+                pass
+
+            disconnect_succeeded = False
+            try:
+                with _suppress_c_output():
+                    pybullet_mod.disconnect(physicsClientId=cid)
+                disconnect_succeeded = True
+            finally:
+                try:
+                    still_connected = pybullet_mod.isConnected(physicsClientId=cid)
+                except Exception:
+                    still_connected = None
+
+                if still_connected in (False, 0) or (disconnect_succeeded and still_connected is None):
+                    self.client_id = -1
+
+            if still_connected in (True, 1):
+                raise RuntimeError(f"PyBullet client {cid} remained connected after disconnect attempt")
 
 
 def move_camera_to(

@@ -45,9 +45,10 @@ def load_ycb_mesh(name: str) -> trimesh.Trimesh:
 
 def transform_mesh(
     mesh: trimesh.Trimesh,
-    pos_inertial: np.ndarray,
-    orn_inertial_xyzw: np.ndarray,
+    pos: np.ndarray,
+    orn_xyzw: np.ndarray,
     obj_name: str | None = None,
+    is_inertial_frame: bool = False,
 ) -> trimesh.Trimesh:
     """Transform visual mesh into world frame taking URDF scale, inertial, and visual origins into account."""
     world_mesh = mesh.copy()
@@ -66,12 +67,13 @@ def transform_mesh(
                 scale = [float(x) for x in mesh_elem.attrib["scale"].split()]
                 world_mesh.apply_scale(scale)
 
-            ine = tree.getroot().find(".//inertial/origin")
-            if ine is not None:
-                rpy = [float(x) for x in ine.get("rpy", "0 0 0").split()]
-                xyz = [float(x) for x in ine.get("xyz", "0 0 0").split()]
-                T_link_ine[:3, :3] = Rotation.from_euler("xyz", rpy).as_matrix()
-                T_link_ine[:3, 3] = xyz
+            if is_inertial_frame:
+                ine = tree.getroot().find(".//inertial/origin")
+                if ine is not None:
+                    rpy = [float(x) for x in ine.get("rpy", "0 0 0").split()]
+                    xyz = [float(x) for x in ine.get("xyz", "0 0 0").split()]
+                    T_link_ine[:3, :3] = Rotation.from_euler("xyz", rpy).as_matrix()
+                    T_link_ine[:3, 3] = xyz
 
             vis = tree.getroot().find(".//visual/origin")
             if vis is not None:
@@ -80,11 +82,15 @@ def transform_mesh(
                 T_link_vis[:3, :3] = Rotation.from_euler("xyz", rpy).as_matrix()
                 T_link_vis[:3, 3] = xyz
 
-    T_world_ine = np.eye(4, dtype=np.float64)
-    T_world_ine[:3, :3] = Rotation.from_quat(orn_inertial_xyzw).as_matrix()
-    T_world_ine[:3, 3] = pos_inertial
+    T_world_link = np.eye(4, dtype=np.float64)
+    T_world_link[:3, :3] = Rotation.from_quat(orn_xyzw).as_matrix()
+    T_world_link[:3, 3] = pos
 
-    T_world_vis = T_world_ine @ np.linalg.inv(T_link_ine) @ T_link_vis
+    if is_inertial_frame:
+        T_world_vis = T_world_link @ np.linalg.inv(T_link_ine) @ T_link_vis
+    else:
+        T_world_vis = T_world_link @ T_link_vis
+
     world_mesh.apply_transform(T_world_vis)
     return world_mesh
 

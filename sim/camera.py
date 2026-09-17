@@ -41,7 +41,7 @@ def capture_rgbd(
         height=intrinsics.height,
         viewMatrix=view_matrix,
         projectionMatrix=proj_matrix,
-        renderer=p.ER_BULLET_HARDWARE_OPENGL,
+        renderer=p.ER_TINY_RENDERER,
         physicsClientId=physics_client_id,
     )
 
@@ -53,3 +53,14 @@ def capture_rgbd(
     view_np = np.array(view_matrix, dtype=np.float32).reshape((4, 4), order="F")
     proj_np = np.array(proj_matrix, dtype=np.float32).reshape((4, 4), order="F")
     return rgb, depth_m, view_np, proj_np
+
+
+def capture_from_pose(world_from_camera, intrinsics, physics_client_id=0):
+    """Render using the measured optical frame: x right, y down, z forward."""
+    pose = np.asarray(world_from_camera, dtype=float)
+    if pose.shape != (4, 4) or not np.isfinite(pose).all():
+        raise ValueError("Camera transform must be a finite 4x4 matrix")
+    return capture_rgbd(
+        pose[:3, 3], pose[:3, 3] + pose[:3, 2], -pose[:3, 1],
+        intrinsics, physics_client_id,
+    )

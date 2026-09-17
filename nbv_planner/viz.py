@@ -1,6 +1,7 @@
 """Live Rerun multi-tab visualizer with full 3D robot arm, camera FOV, and visual metrics HUD."""
 
 import os
+import sys
 import time
 import numpy as np
 import rerun as rr
@@ -23,6 +24,7 @@ class NBVVisualizer:
         self.robot_links_meta: list[tuple[int, tuple, tuple]] = []
 
         self.setup_stages: list[dict] = [
+            {"name": "Start Pose", "status": "STANDBY", "info": ""},
             {"name": "Scene & Target Surface", "status": "STANDBY", "info": ""},
             {"name": "Orbit Viewpoints", "status": "STANDBY", "info": ""},
             {"name": "cuRobo IK Reachability", "status": "STANDBY", "info": ""},
@@ -56,20 +58,44 @@ class NBVVisualizer:
                     active_tab=0,
                 ),
             )
+            # rr.spawn looks up the `rerun` viewer binary on PATH; it lives next to the interpreter.
+            os.environ["PATH"] = os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", "")
             rr.init(f"nbv_scan_{obj_name}", spawn=True)
             rr.send_blueprint(blueprint)
 
-    def init_scene(self, env, mesh_world) -> None:
-        """Log table, object CAD mesh, and robot UR5 link assets."""
+    def log_cad_mesh(self, mesh_world) -> None:
+        """Log the object CAD mesh once the planner has loaded it."""
         if not self.enabled:
             return
-
-        # 1. Object CAD Mesh
         vertices = np.asarray(mesh_world.vertices, dtype=np.float32)
         faces = np.asarray(mesh_world.faces, dtype=np.uint32)
         rr.log("scene/cad_mesh", rr.Mesh3D(vertex_positions=vertices, triangle_indices=faces))
 
-        # 2. Table Slab
+    def log_start_pose(self, observation, look_at_world: np.ndarray) -> None:
+        """Log the camera frustum and RGB image captured at the start pose, plus the look-at point."""
+        if not self.enabled:
+            return
+        T = observation.world_from_camera
+        intr = observation.intrinsics
+        rr.log("world/start_pose", rr.Transform3D(translation=T[:3, 3], mat3x3=T[:3, :3]))
+        rr.log(
+            "world/start_pose/pinhole",
+            rr.Pinhole(
+                resolution=[intr.width, intr.height],
+                focal_length=float(intr.fx),
+                principal_point=[float(intr.cx), float(intr.cy)],
+                image_plane_distance=0.18,
+            ),
+        )
+        rr.log("world/start_pose/pinhole/rgb", rr.Image(observation.rgb))
+        rr.log("world/start_look_at", rr.Points3D(positions=[look_at_world], colors=[255, 120, 30], radii=0.01))
+
+    def init_scene(self, env) -> None:
+        """Log table and robot UR5 link assets."""
+        if not self.enabled:
+            return
+
+        # 1. Table Slab
         if hasattr(env, "table_aabb"):
             lo, hi = env.table_aabb
             table_center = ((lo + hi) / 2.0).tolist()
@@ -98,7 +124,7 @@ class NBVVisualizer:
             ),
         )
 
-        # 3. Robot Links (MPO-700 Chassis + Cabinet + UR5 + Camera + Robotiq-85 Gripper)
+        # 2. Robot Links (MPO-700 Chassis + Cabinet + UR5 + Camera + Robotiq-85 Gripper)
         shapes = env._p.getVisualShapeData(env.robot_id, physicsClientId=env.client_id)
         self.robot_links_meta = []
         for s in shapes:
@@ -125,14 +151,14 @@ class NBVVisualizer:
                 self.robot_links_meta.append((link_id, local_pos, local_orn, (1.0, 1.0, 1.0)))
 
         self.update_robot_pose(env)
-        self._update_metrics_hud(current_cov=0.0, total_samples=len(vertices))
+        self._update_metrics_hud(current_cov=0.0, total_samples=0)
 
         # Initial benchmark tree before first view executes
         init_tree = [
             "```text",
             "Pipeline Status: Initialized",
             "├── GPU Compute [cuRobo Reachability & CUDA Ray Scoring standby]",
-            "└── CPU Host    [PyBullet Sim & CAD Surface Sampling ready]",
+            "└── CPU Host    [PyBullet Sim ready]",
             "```",
         ]
         rr.log("benchmark", rr.TextDocument("\n".join(init_tree), media_type="text/markdown"))

@@ -35,7 +35,7 @@ def camera_lookat_quaternion_xyzw(eye: np.ndarray, target: np.ndarray) -> np.nda
     world_up = WORLD_UP_Z
     if abs(np.dot(z_axis, world_up)) > NEAR_VERTICAL_COSINE:
         world_up = WORLD_UP_Y_FALLBACK
-    x_axis = np.cross(world_up, z_axis)
+    x_axis = np.cross(z_axis, world_up)
     x_axis /= np.linalg.norm(x_axis)
     y_axis = np.cross(z_axis, x_axis)
     return Rotation.from_matrix(np.column_stack([x_axis, y_axis, z_axis])).as_quat()
@@ -96,6 +96,51 @@ def world_poses_to_base_link_frame(
     return t_base, q_base
 
 
+_CACHED_IK_SOLVER = None
+_CACHED_IK_CONFIG_KEY = None
+
+
+def get_ik_solver(
+    urdf_path: str,
+    base_link: str,
+    ee_link: str,
+    position_threshold: float = IK_POSITION_THRESHOLD_M,
+    rotation_threshold: float = IK_ROTATION_THRESHOLD_RAD,
+    num_seeds: int = IK_NUM_SEEDS,
+):
+    """Retrieve or initialize a cached CuRobo IKSolver."""
+    global _CACHED_IK_SOLVER, _CACHED_IK_CONFIG_KEY
+    key = (
+        urdf_path,
+        base_link,
+        ee_link,
+        float(position_threshold),
+        float(rotation_threshold),
+        int(num_seeds),
+    )
+    if _CACHED_IK_SOLVER is None or _CACHED_IK_CONFIG_KEY != key:
+        from curobo.types.base import TensorDeviceType
+        from curobo.types.robot import RobotConfig
+        from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+
+        tensor_args = TensorDeviceType()
+        robot_cfg = RobotConfig.from_basic(urdf_path, base_link, ee_link, tensor_args)
+        ik_cfg = IKSolverConfig.load_from_robot_config(
+            robot_cfg,
+            world_model=None,  # kinematics only; obstacles are the motion planner's job
+            rotation_threshold=rotation_threshold,
+            position_threshold=position_threshold,
+            num_seeds=num_seeds,
+            self_collision_check=False,
+            self_collision_opt=False,
+            tensor_args=tensor_args,
+            use_cuda_graph=False,
+        )
+        _CACHED_IK_SOLVER = IKSolver(ik_cfg)
+        _CACHED_IK_CONFIG_KEY = key
+    return _CACHED_IK_SOLVER
+
+
 def ik_filter(
     urdf_path: str,
     base_link: str,
@@ -109,31 +154,27 @@ def ik_filter(
     num_seeds: int = IK_NUM_SEEDS,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Which candidates the arm can IK to. Returns (reachable (N,), q_joints (N,6)), zeroed where not."""
-    import torch
-    from curobo.types.base import TensorDeviceType
-    from curobo.types.math import Pose
-    from curobo.types.robot import RobotConfig
-    from curobo.wrap.reacher.ik_solver import IKSolver, IKSolverConfig
+    t_cand = np.asarray(t_candidates_world, dtype=np.float32)
+    q_cand = np.asarray(q_candidates_world_xyzw, dtype=np.float32)
+    if len(t_cand) == 0:
+        return np.zeros(0, dtype=bool), np.zeros((0, 6), dtype=np.float32)
 
-    tensor_args = TensorDeviceType()
-    robot_cfg = RobotConfig.from_basic(urdf_path, base_link, ee_link, tensor_args)
-    ik_solver = IKSolver(
-        IKSolverConfig.load_from_robot_config(
-            robot_cfg,
-            world_model=None,  # kinematics only; obstacles are the motion planner's job
-            rotation_threshold=rotation_threshold,
-            position_threshold=position_threshold,
-            num_seeds=num_seeds,
-            self_collision_check=False,
-            self_collision_opt=False,
-            tensor_args=tensor_args,
-            use_cuda_graph=True,
-        )
+    import torch
+    from curobo.types.math import Pose
+
+    ik_solver = get_ik_solver(
+        urdf_path,
+        base_link,
+        ee_link,
+        position_threshold=position_threshold,
+        rotation_threshold=rotation_threshold,
+        num_seeds=num_seeds,
     )
+    tensor_args = ik_solver.tensor_args
 
     # CuRobo solves in base_link frame, not world.
     t_base, q_base_xyzw = world_poses_to_base_link_frame(
-        t_candidates_world, q_candidates_world_xyzw, t_base_world, q_base_world_xyzw
+        t_cand, q_cand, t_base_world, q_base_world_xyzw
     )
 
     # It also wants contiguous float32 and wxyz quaternions.
@@ -145,7 +186,11 @@ def ik_filter(
     torch.cuda.synchronize()
 
     reachable = result.success.squeeze(-1).cpu().numpy().astype(bool)
-    q_joints = result.solution.squeeze(1).cpu().numpy().astype(np.float32)
+    solution = result.solution
+    if solution.ndim == 3:
+        q_joints = solution.squeeze(1).cpu().numpy().astype(np.float32)
+    else:
+        q_joints = solution.cpu().numpy().astype(np.float32)
     q_joints[~reachable] = 0.0  # so an unreachable row can't be mistaken for a valid config
     return reachable, q_joints
 

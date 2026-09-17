@@ -31,6 +31,12 @@ class TrajectoryPlan:
     optimization_ms: float = 0.0
 
 _MOTION_GEN = None
+_MOTION_GEN_WARMUP_MS = 0.0
+
+
+def get_motion_gen_warmup_ms() -> float:
+    """Monotonic duration of the cuRobo MotionGen warm-up phase in milliseconds."""
+    return _MOTION_GEN_WARMUP_MS
 
 
 def _build_robot_config(tensor_args, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M):
@@ -44,28 +50,46 @@ def _build_robot_config(tensor_args, collision_sphere_buffer: float = COLLISION_
     return RobotConfig.from_dict(cfg, tensor_args=tensor_args)
 
 
-def get_motion_gen(world_config=None, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M):
+def warmup_motion_gen(world_config=None, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M, reporter=None):
+    """Explicitly warm up cuRobo MotionGen once and record monotonic duration."""
+    global _MOTION_GEN, _MOTION_GEN_WARMUP_MS
+    if _MOTION_GEN is not None:
+        return _MOTION_GEN
+    from curobo.geom.sdf.world import CollisionCheckerType
+    from curobo.types.base import TensorDeviceType
+    from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig
+
+    tensor_args = TensorDeviceType()
+    cfg = MotionGenConfig.load_from_robot_config(
+        _build_robot_config(tensor_args, collision_sphere_buffer=collision_sphere_buffer),
+        world_config,
+        tensor_args,
+        interpolation_dt=0.04,
+        trajopt_tsteps=32,
+        use_cuda_graph=False,
+        gradient_trajopt_file=GRADIENT_TRAJOPT_FILE,
+        finetune_trajopt_file=FINETUNE_TRAJOPT_FILE,
+        collision_checker_type=CollisionCheckerType.PRIMITIVE,
+    )
+    mg = MotionGen(cfg)
+    t_w0 = time.perf_counter()
+    if reporter is not None:
+        reporter.start_stage("warmup")
+    try:
+        mg.warmup(enable_graph=False, warmup_js_trajopt=False)
+    finally:
+        if reporter is not None:
+            reporter.end_stage("warmup")
+    _MOTION_GEN_WARMUP_MS = (time.perf_counter() - t_w0) * 1000.0
+    _MOTION_GEN = mg
+    return _MOTION_GEN
+
+
+def get_motion_gen(world_config=None, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M, reporter=None):
     """Build or update MotionGen once and reuse across the process."""
     global _MOTION_GEN
     if _MOTION_GEN is None:
-        from curobo.geom.sdf.world import CollisionCheckerType
-        from curobo.types.base import TensorDeviceType
-        from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig
-
-        tensor_args = TensorDeviceType()
-        cfg = MotionGenConfig.load_from_robot_config(
-            _build_robot_config(tensor_args, collision_sphere_buffer=collision_sphere_buffer),
-            world_config,
-            tensor_args,
-            interpolation_dt=0.04,
-            trajopt_tsteps=32,
-            use_cuda_graph=False,
-            gradient_trajopt_file=GRADIENT_TRAJOPT_FILE,
-            finetune_trajopt_file=FINETUNE_TRAJOPT_FILE,
-            collision_checker_type=CollisionCheckerType.PRIMITIVE,
-        )
-        _MOTION_GEN = MotionGen(cfg)
-        _MOTION_GEN.warmup()
+        warmup_motion_gen(world_config=world_config, collision_sphere_buffer=collision_sphere_buffer, reporter=reporter)
     elif world_config is not None:
         _MOTION_GEN.update_world(world_config)
     return _MOTION_GEN
@@ -83,6 +107,7 @@ def build_world_config(
     obj_dims: np.ndarray | None = None,
     table_center_world: np.ndarray | None = None,
     table_dims: Sequence[float] | None = None,
+    q_table_world_xyzw: np.ndarray | None = None,
 ):
     """Construct cuRobo collision cuboids for table and object in base_link frame.
 
@@ -99,15 +124,17 @@ def build_world_config(
     elif table_center_world is not None and table_dims is not None:
         t_table_w = np.asarray(table_center_world, dtype=float).copy()
         dims_table = list(table_dims)
-        t_table_w[2] -= TABLE_CLEARANCE_M
+        if q_table_world_xyzw is None:
+            t_table_w[2] -= TABLE_CLEARANCE_M
     else:
         t_table_w = None
         dims_table = None
 
     if t_table_w is not None and dims_table is not None:
+        q_tab = q_table_world_xyzw if q_table_world_xyzw is not None else np.array([0.0, 0.0, 0.0, 1.0])
         t_table_base, q_table_base_xyzw = world_poses_to_base_link_frame(
             t_table_w[None, :],
-            np.array([[0.0, 0.0, 0.0, 1.0]]),
+            np.asarray(q_tab)[None, :],
             t_base_world,
             q_base_world_xyzw,
         )
@@ -155,7 +182,7 @@ def plan_motion_batch(
         "wrist_3_joint",
     ),
     max_attempts: int = MOTION_PLAN_MAX_ATTEMPTS,
-    enable_graph: bool = True,
+    enable_graph: bool = False,
 ) -> tuple[bool, int, np.ndarray | None, float]:
     """Plan collision-free trajectories on GPU in parallel for a batch of candidate camera poses.
 
@@ -209,14 +236,40 @@ def plan_motion_batch(
 
     succ_idx = torch.where(result.success)[0]
     if len(succ_idx) == 0:
+        if hasattr(result, "status"):
+            print(f"[cuRobo batch opt failed] status: {result.status}")
         return False, -1, None, opt_ms
 
     best_k = int(succ_idx[0].item())
-    traj_item = result.interpolated_plan[best_k].trim_trajectory(
-        0, result.path_buffer_last_tstep[best_k]
-    )
+    plan_obj = result.interpolated_plan
+    if isinstance(plan_obj, list):
+        traj_item = plan_obj[best_k]
+    elif hasattr(plan_obj, "__getitem__") and hasattr(plan_obj, "batch_size") and plan_obj.batch_size > 1:
+        traj_item = plan_obj[best_k]
+    else:
+        traj_item = plan_obj
+
+    if hasattr(traj_item, "trim_trajectory") and hasattr(result, "path_buffer_last_tstep"):
+        try:
+            last_t = result.path_buffer_last_tstep[best_k]
+            traj_item = traj_item.trim_trajectory(0, last_t)
+        except Exception:
+            pass
+
     idx = [traj_item.joint_names.index(name) for name in arm_joint_names]
-    trajectory = traj_item.position[:, idx].cpu().numpy()
+    pos = traj_item.position
+    if hasattr(pos, "cpu"):
+        pos_np = pos.cpu().numpy()
+    else:
+        pos_np = np.asarray(pos)
+
+    if pos_np.ndim == 3:
+        if pos_np.shape[0] > 1 and best_k < pos_np.shape[0]:
+            pos_np = pos_np[best_k]
+        else:
+            pos_np = pos_np[0]
+
+    trajectory = pos_np[:, idx]
 
     return True, best_k, trajectory, opt_ms
 
@@ -237,7 +290,7 @@ def plan_motion_single(
         "wrist_3_joint",
     ),
     max_attempts: int = MOTION_PLAN_MAX_ATTEMPTS,
-    enable_graph: bool = True,
+    enable_graph: bool = False,
 ) -> tuple[bool, np.ndarray | None, float]:
     """Single pose planning wrapper around plan_motion_batch."""
     ok, _, traj, opt_ms = plan_motion_batch(

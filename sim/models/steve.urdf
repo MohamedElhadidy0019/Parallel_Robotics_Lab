@@ -628,11 +628,13 @@
   </joint>
 
 
-  <!-- Dummy Camera link -->
+  <!-- Gazebo camera_color_optical_frame expressed in this legacy URDF ee_link.
+       ROS ur_description uses different wrist link frames; copying its camera
+       mount relative to ee_link here would introduce a 90-degree pose error. -->
   <joint name="dummy_camera_joint" type="fixed">
     <parent link="ee_link"/>
     <child link="dummy_camera_link"/>
-    <origin rpy="1.57 3.14 1.57" xyz="0.02 0.0 -0.06"/>
+    <origin xyz="0.0824968606369 0.0375010071413 -0.0928999999396" rpy="3.14159265358 2.05103933837e-10 -3.14158895358"/>
   </joint>
   <link name="dummy_camera_link">
     <contact>
