@@ -1,5 +1,6 @@
 """Collision-aware arm motion to a target camera pose via CuRobo MotionGen."""
 
+import copy
 import os
 import time
 
@@ -13,6 +14,7 @@ from nbv_planner.config import (
     CUROBO_CONFIGS_DIR,
     FINETUNE_TRAJOPT_FILE,
     GRADIENT_TRAJOPT_FILE,
+    MAX_POSE_ERROR_M,
     MOTION_PLAN_MAX_ATTEMPTS,
     ROBOT_CONFIG_PATH,
     TABLE_CLEARANCE_M,
@@ -32,6 +34,21 @@ class TrajectoryPlan:
 
 _MOTION_GEN = None
 _MOTION_GEN_WARMUP_MS = 0.0
+_KINEMATICS = None
+_ROBOT_MODEL = {"urdf_path": None, "config": None}
+
+
+def set_robot_model(urdf_path: str | None = None, robot_config: dict | None = None) -> None:
+    """Plan for this URDF and cuRobo robot config instead of the packaged ones, dropping cached solvers."""
+    global _MOTION_GEN, _KINEMATICS
+    _ROBOT_MODEL["urdf_path"] = urdf_path
+    _ROBOT_MODEL["config"] = robot_config
+    _MOTION_GEN = None
+    _KINEMATICS = None
+
+
+def robot_urdf_path() -> str:
+    return _ROBOT_MODEL["urdf_path"] or URDF_PATH
 
 
 def get_motion_gen_warmup_ms() -> float:
@@ -43,11 +60,35 @@ def _build_robot_config(tensor_args, collision_sphere_buffer: float = COLLISION_
     from curobo.types.robot import RobotConfig
     from curobo.util_file import load_yaml
 
-    cfg = load_yaml(ROBOT_CONFIG_PATH)
-    cfg["robot_cfg"]["kinematics"]["urdf_path"] = URDF_PATH
-    cfg["robot_cfg"]["kinematics"]["asset_root_path"] = os.path.dirname(URDF_PATH)
+    cfg = copy.deepcopy(_ROBOT_MODEL["config"]) if _ROBOT_MODEL["config"] else load_yaml(ROBOT_CONFIG_PATH)
+    urdf_path = robot_urdf_path()
+    cfg["robot_cfg"]["kinematics"]["urdf_path"] = urdf_path
+    cfg["robot_cfg"]["kinematics"]["asset_root_path"] = os.path.dirname(urdf_path)
     cfg["robot_cfg"]["kinematics"]["collision_sphere_buffer"] = float(collision_sphere_buffer)
     return RobotConfig.from_dict(cfg, tensor_args=tensor_args)
+
+
+def robot_spheres_world(
+    joint_angles: np.ndarray,
+    t_base_world: np.ndarray,
+    q_base_world_xyzw: np.ndarray,
+    collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M,
+) -> np.ndarray:
+    """Collision spheres of the arm for each given configuration, as world (x, y, z, radius). Disabled spheres keep their negative radius."""
+    global _KINEMATICS
+    from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
+    from curobo.types.base import TensorDeviceType
+    from scipy.spatial.transform import Rotation
+
+    tensor_args = TensorDeviceType()
+    if _KINEMATICS is None:
+        _KINEMATICS = CudaRobotModel(_build_robot_config(tensor_args, collision_sphere_buffer).kinematics)
+
+    configurations = np.atleast_2d(np.asarray(joint_angles, dtype=np.float32))
+    spheres = _KINEMATICS.get_state(tensor_args.to_device(configurations)).link_spheres_tensor.cpu().numpy()
+    centers = Rotation.from_quat(q_base_world_xyzw).apply(spheres[..., :3].reshape(-1, 3))
+    centers = centers.reshape(spheres.shape[0], -1, 3) + np.asarray(t_base_world)
+    return np.concatenate([centers, spheres[..., 3:]], axis=-1)
 
 
 def warmup_motion_gen(world_config=None, collision_sphere_buffer: float = COLLISION_SPHERE_BUFFER_M, reporter=None):
@@ -223,15 +264,20 @@ def plan_motion_batch(
     )
 
     t_opt_0 = time.perf_counter()
-    result = motion_gen.plan_batch(
-        q_start,
-        goal,
-        MotionGenPlanConfig(
-            max_attempts=max_attempts,
-            enable_graph=enable_graph,
-            enable_graph_attempt=1 if enable_graph else None,
-        ),
-    )
+    try:
+        result = motion_gen.plan_batch(
+            q_start,
+            goal,
+            MotionGenPlanConfig(
+                max_attempts=max_attempts,
+                enable_graph=enable_graph,
+                enable_graph_attempt=1 if enable_graph else None,
+            ),
+        )
+    except RuntimeError as error:
+        # cuRobo can fail merging retry attempts; treat it as a blocked batch rather than losing the scan.
+        print(f"[cuRobo batch opt error] {error}", flush=True)
+        return False, -1, None, (time.perf_counter() - t_opt_0) * 1000.0
     opt_ms = (time.perf_counter() - t_opt_0) * 1000.0
 
     succ_idx = torch.where(result.success)[0]
@@ -307,3 +353,31 @@ def plan_motion_single(
     return ok, traj, opt_ms
 
 
+def move_camera(
+    robot,
+    position_world: np.ndarray,
+    quaternion_xyzw: np.ndarray,
+    world_config,
+    visualizer=None,
+    max_position_error: float = MAX_POSE_ERROR_M,
+    max_rotation_error: float = 0.05,
+) -> bool:
+    """Plan a collision-free path with cuRobo, drive the robot along it, and confirm the camera arrived."""
+    from nbv_planner.start_pose import pose_errors
+
+    t_base, q_base = robot.base_pose()
+    ok, _, trajectory, _ = plan_motion_batch(
+        np.asarray(position_world)[None, :],
+        np.asarray(quaternion_xyzw)[None, :],
+        robot.current_arm_joints(),
+        t_base,
+        q_base,
+        world_config=world_config,
+        arm_joint_names=robot.arm_joint_names,
+        enable_graph=False,
+    )
+    if not ok or trajectory is None:
+        return False
+    robot.execute_trajectory(trajectory, visualizer=visualizer)
+    position_error, rotation_error = pose_errors(robot.camera_world_transform(), position_world, quaternion_xyzw)
+    return position_error <= max_position_error and rotation_error <= max_rotation_error

@@ -25,6 +25,8 @@ import numpy as np
 import torch
 from torch.utils.cpp_extension import load
 
+from nbv_planner.config import DEFAULT_CAMERA_NEAR
+
 DEFAULT_BACKFACE_MARGIN = 0.35
 DEFAULT_OCCLUSION_EPSILON_M = 0.003
 
@@ -58,6 +60,50 @@ def _get_cuda_module():
     return _EXT_MODULE
 
 
+def sphere_blocked_mask(
+    camera_positions: np.ndarray,
+    points: np.ndarray,
+    spheres: np.ndarray,
+    min_distance: float = DEFAULT_CAMERA_NEAR,
+    device: str = "cuda",
+    chunk: int = 8,
+) -> np.ndarray:
+    """Which camera-to-point lines are blocked by that camera's own spheres.
+
+    Spheres holding the camera itself cannot occlude it, so any sphere containing the camera is skipped.
+
+    Args:
+        camera_positions: (M, 3) camera positions in world coordinates.
+        points: (N, 3) target points in world coordinates.
+        spheres: (M, S, 4) spheres per camera as (x, y, z, radius); radius <= 0 is ignored.
+        min_distance: Nearest distance along the ray that can block, the camera near plane.
+
+    Returns:
+        blocked: (M, N) boolean mask.
+    """
+    cameras = torch.as_tensor(camera_positions, dtype=torch.float32, device=device)
+    targets = torch.as_tensor(points, dtype=torch.float32, device=device)
+    all_spheres = torch.as_tensor(spheres, dtype=torch.float32, device=device)
+    blocked = torch.zeros((len(cameras), len(targets)), dtype=torch.bool, device=device)
+
+    for start in range(0, len(cameras), chunk):
+        eyes = cameras[start:start + chunk, None, :]
+        rays = targets[None, :, :] - eyes
+        lengths = torch.linalg.norm(rays, dim=-1)
+        directions = rays / lengths[..., None]
+
+        centers, radii = all_spheres[start:start + chunk, :, :3], all_spheres[start:start + chunk, :, 3]
+        to_centers = centers[:, None, :, :] - eyes[..., None, :]
+        holds_camera = (to_centers[:, 0] ** 2).sum(-1) <= radii ** 2
+        along_ray = torch.einsum("mnsd,mnd->mns", to_centers, directions)
+        nearest = along_ray.clamp(min=min_distance).minimum(lengths[..., None])
+        square_distance = (to_centers ** 2).sum(-1) - 2.0 * nearest * along_ray + nearest ** 2
+        usable = (radii > 0) & ~holds_camera
+        blocked[start:start + chunk] = ((square_distance < radii[:, None, :] ** 2) & usable[:, None, :]).any(-1)
+
+    return blocked.cpu().numpy()
+
+
 def score_candidate_views(
     candidate_positions: np.ndarray,
     unseen_points: np.ndarray,
@@ -66,6 +112,7 @@ def score_candidate_views(
     backface_margin: float = DEFAULT_BACKFACE_MARGIN,
     occlusion_epsilon_m: float = DEFAULT_OCCLUSION_EPSILON_M,
     device: str = "cuda",
+    blocker_spheres: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Score candidate camera positions against unseen surface points.
 
@@ -77,6 +124,7 @@ def score_candidate_views(
         backface_margin: Cosine threshold for front-facing test.
         occlusion_epsilon_m: Small offset margin (meters) to avoid self-occlusion.
         device: CUDA device identifier.
+        blocker_spheres: Optional (M, S, 4) spheres per candidate, typically the arm holding the camera.
 
     Returns:
         scores: (M,) int32 array of visible unseen points per candidate view.
@@ -102,4 +150,9 @@ def score_candidate_views(
         t_cams, t_pts, t_nrm, t_tri, float(backface_margin), float(occlusion_epsilon_m)
     )
 
-    return scores.cpu().numpy(), vis_mask.cpu().numpy()
+    if blocker_spheres is None:
+        return scores.cpu().numpy(), vis_mask.cpu().numpy()
+
+    visible = vis_mask.cpu().numpy().astype(bool)
+    visible &= ~sphere_blocked_mask(candidate_positions, unseen_points, blocker_spheres, device=device)
+    return visible.sum(axis=1).astype(np.int32), visible.astype(np.uint8)

@@ -7,11 +7,11 @@ import numpy as np
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSET_PATH  = os.path.join(PROJECT_ROOT, "third_party/shelf_gym_repo/shelf_gym/meshes/urdf")
-URDF_PATH   = os.path.join(PROJECT_ROOT, "sim/models/steve.urdf")
-YCB_ROOT    = os.path.join(PROJECT_ROOT, "third_party/shelf_gym_repo/shelf_gym/meshes/urdf/ycb_objects")
+URDF_PATH   = os.environ.get("NBV_URDF_PATH", os.path.join(PROJECT_ROOT, "sim/models/steve.urdf"))
+YCB_ROOT    = os.environ.get("NBV_YCB_ROOT", os.path.join(ASSET_PATH, "ycb_objects"))
 CACHE_DIR   = os.path.join(PROJECT_ROOT, "reachability")
 
-CUROBO_CONFIGS_DIR      = os.path.join(PROJECT_ROOT, "sim/curobo_configs")
+CUROBO_CONFIGS_DIR      = os.path.join(os.path.dirname(os.path.abspath(__file__)), "curobo_configs")
 ROBOT_CONFIG_PATH        = os.path.join(CUROBO_CONFIGS_DIR, "steve_ur5.yml")
 GRADIENT_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_planner/curobo_configs/gradient_trajopt.yml")
 FINETUNE_TRAJOPT_FILE    = os.path.join(PROJECT_ROOT, "nbv_planner/curobo_configs/finetune_trajopt.yml")
@@ -78,6 +78,12 @@ START_CAMERA_POSITION_BASE = (0.50, 0.0, 1.15)
 START_LOOK_AT_BASE         = (0.785, 0.0, 0.85)
 START_SAFETY_RADIUS_M      = 0.15   # box kept clear around the look-at point while the object is unknown
 START_ROTATION_TOL_RAD     = 0.05
+START_PLAN_ATTEMPTS        = 3      # trajectory optimisation is seeded randomly, so retry a blocked start pose
+
+# -- Scan vs CAD alignment (mode "both") -----------------------------------------
+
+ALIGN_MAX_CENTER_ERROR_M   = 0.015  # scanned box center vs CAD box center
+ALIGN_MAX_POINT_DISTANCE_M = 0.010  # 95th percentile distance from scanned points to the CAD surface
 
 # -- Coverage target & base exclusion -----------------------------------------
 

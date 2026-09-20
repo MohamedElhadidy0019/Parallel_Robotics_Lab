@@ -6,6 +6,7 @@ import time
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
+from scipy.spatial.transform import Rotation
 
 from nbv_planner.camera import CameraIntrinsics
 from nbv_planner.config import T_OPENGL_OPTICAL
@@ -15,9 +16,11 @@ from nbv_planner.coverage import CoverageTracker
 class NBVVisualizer:
     """Manages 4-tab interactive Rerun visualization including 3D robot arm motion."""
 
-    def __init__(self, obj_name: str, enabled: bool = True) -> None:
+    def __init__(self, obj_name: str, enabled: bool = True, mode: str = "cad") -> None:
         self.enabled = enabled
         self.obj_name = obj_name
+        self.mode = mode
+        self.urdf_tree = None
         self.executed_cams: list[np.ndarray] = []
         self.accumulated_clouds: list[np.ndarray] = []
         self.metrics_history: list[dict] = []
@@ -25,6 +28,7 @@ class NBVVisualizer:
 
         self.setup_stages: list[dict] = [
             {"name": "Start Pose", "status": "STANDBY", "info": ""},
+            {"name": "Object Discovery", "status": "STANDBY", "info": ""},
             {"name": "Scene & Target Surface", "status": "STANDBY", "info": ""},
             {"name": "Orbit Viewpoints", "status": "STANDBY", "info": ""},
             {"name": "cuRobo IK Reachability", "status": "STANDBY", "info": ""},
@@ -38,16 +42,38 @@ class NBVVisualizer:
             # Multi-tab layout:
             # Tab 0: 3D Inspection (World, Robot, Reconstruction, Coverage, HUD)
             # Tab 1: Pipeline Benchmark Tree (Unfolding execution tree & telemetry)
+            right_panels = [
+                rrb.Spatial3DView(name="Reconstruction", origin="world",
+                                  contents=["+ $origin/scene/**", "+ $origin/reconstruction/**"],
+                                  time_ranges=rrb.VisibleTimeRanges(timeline="log_time",
+                                                                    start=rrb.TimeRangeBoundary.infinite(),
+                                                                    end=rrb.TimeRangeBoundary.infinite())),
+                rrb.Spatial3DView(name="Coverage", origin="world",
+                                  contents=["+ $origin/scene/**", "+ $origin/coverage/**"],
+                                  time_ranges=rrb.VisibleTimeRanges(timeline="log_time",
+                                                                    start=rrb.TimeRangeBoundary.infinite(),
+                                                                    end=rrb.TimeRangeBoundary.infinite())),
+                rrb.TextDocumentView(name="Status HUD", contents=["+ metrics/hud/**"]),
+            ]
+            right_shares = [1.0, 1.0, 0.7]
+            if mode != "cad":
+                right_panels.insert(0, rrb.Horizontal(
+                    rrb.Spatial2DView(name="Segmentation", origin="world/scan_camera/pinhole"),
+                    rrb.Spatial3DView(name="Accumulation", origin="world",
+                                      contents=["+ $origin/discovery/**"]),
+                ))
+                right_shares.insert(0, 1.0)
+
             blueprint = rrb.Blueprint(
                 rrb.Tabs(
                     rrb.Horizontal(
-                        rrb.Spatial3DView(name="Live 3D Environment (World & Robot)", contents=["+ /**"]),
-                        rrb.Vertical(
-                            rrb.Spatial3DView(name="Reconstruction", contents=["+ scene/**", "+ reconstruction/**"]),
-                            rrb.Spatial3DView(name="Coverage", contents=["+ scene/**", "+ coverage/**"]),
-                            rrb.TextDocumentView(name="Status HUD", contents=["+ metrics/hud/**"]),
-                            row_shares=[1.0, 1.0, 0.7],
+                        rrb.Spatial3DView(
+                            name="Live 3D Environment (World & Robot)",
+                            origin="world",
+                            contents=["+ $origin/**", "- $origin/start_pose/pinhole/rgb",
+                                      "- $origin/scan_camera/pinhole/rgb"],
                         ),
+                        rrb.Vertical(*right_panels, row_shares=right_shares),
                         column_shares=[1.75, 1.0],
                         name="3D Inspection",
                     ),
@@ -63,13 +89,13 @@ class NBVVisualizer:
             rr.init(f"nbv_scan_{obj_name}", spawn=True)
             rr.send_blueprint(blueprint)
 
-    def log_cad_mesh(self, mesh_world) -> None:
-        """Log the object CAD mesh once the planner has loaded it."""
+    def log_object_mesh(self, mesh_world) -> None:
+        """Log the object mesh the planner scores views against (CAD or reconstructed)."""
         if not self.enabled:
             return
         vertices = np.asarray(mesh_world.vertices, dtype=np.float32)
         faces = np.asarray(mesh_world.faces, dtype=np.uint32)
-        rr.log("scene/cad_mesh", rr.Mesh3D(vertex_positions=vertices, triangle_indices=faces))
+        rr.log("world/scene/object_mesh", rr.Mesh3D(vertex_positions=vertices, triangle_indices=faces))
 
     def log_start_pose(self, observation, look_at_world: np.ndarray) -> None:
         """Log the camera frustum and RGB image captured at the start pose, plus the look-at point."""
@@ -90,92 +116,107 @@ class NBVVisualizer:
         rr.log("world/start_pose/pinhole/rgb", rr.Image(observation.rgb))
         rr.log("world/start_look_at", rr.Points3D(positions=[look_at_world], colors=[255, 120, 30], radii=0.01))
 
-    def init_scene(self, env) -> None:
-        """Log table and robot UR5 link assets."""
+    def log_cad_alignment(self, mesh_world, aligned: bool) -> None:
+        """Overlay the CAD mesh on the accumulated points, green when it agrees with the scan and red when not."""
+        if not self.enabled:
+            return
+        color = [60, 200, 90, 90] if aligned else [230, 50, 50, 90]
+        rr.log(
+            "world/discovery/cad_mesh",
+            rr.Mesh3D(vertex_positions=np.asarray(mesh_world.vertices, dtype=np.float32),
+                      triangle_indices=np.asarray(mesh_world.faces, dtype=np.uint32), albedo_factor=color),
+        )
+
+    def log_ring_views(self, positions: np.ndarray) -> None:
+        """Log the reachable camera positions planned around the discovered object."""
+        if not self.enabled:
+            return
+        rr.log("world/discovery/ring_views", rr.Points3D(positions=positions, colors=[255, 150, 40], radii=0.012))
+
+    def log_discovery_frame(self, label: str, observation, detection, estimate) -> None:
+        """Log the segmented camera image with its prompt, and the merged object points and box so far."""
+        if not self.enabled:
+            return
+        T = observation.world_from_camera
+        intr = observation.intrinsics
+        rgb = observation.rgb.astype(np.float32)
+        rgb[detection.mask] = 0.5 * rgb[detection.mask] + 0.5 * np.array([40, 220, 110])
+
+        rr.log("world/scan_camera", rr.Transform3D(translation=T[:3, 3], mat3x3=T[:3, :3]))
+        rr.log(
+            "world/scan_camera/pinhole",
+            rr.Pinhole(
+                resolution=[intr.width, intr.height],
+                focal_length=float(intr.fx),
+                principal_point=[float(intr.cx), float(intr.cy)],
+                image_plane_distance=0.12,
+            ),
+        )
+        rr.log("world/scan_camera/pinhole/rgb", rr.Image(rgb.astype(np.uint8)))
+        rr.log(
+            "world/scan_camera/pinhole/prompt",
+            rr.Boxes2D(array=list(detection.prompt_box), array_format=rr.Box2DFormat.XYXY,
+                       colors=[255, 200, 0], labels=[label]),
+        )
+
+        box = estimate.box
+        shift = "" if np.isinf(estimate.center_shift) else f", shift {estimate.center_shift * 1000:.1f} mm"
+        rr.log(
+            "world/discovery/box",
+            rr.Boxes3D(centers=[box.center], half_sizes=[box.size / 2.0],
+                       quaternions=[Rotation.from_euler("z", box.yaw).as_quat()],
+                       colors=[40, 120, 255], labels=[f"{label}{shift}"]),
+        )
+        rr.log("world/discovery/points", rr.Points3D(positions=estimate.points, colors=[40, 220, 110], radii=0.0015))
+
+    def init_scene(self, robot) -> None:
+        """Log the table, the ground, and the robot itself from its URDF."""
         if not self.enabled:
             return
 
-        # 1. Table Slab
-        if hasattr(env, "table_aabb"):
-            lo, hi = env.table_aabb
-            table_center = ((lo + hi) / 2.0).tolist()
-            half_sizes = [((hi - lo) / 2.0).tolist()]
-        else:
-            r = float(env.max_reach())
-            bx, by = float(env.base_pose()[0][0]), float(env.base_pose()[0][1])
-            table_center = [bx, by, float(env.table_top_z) - 0.02]
-            half_sizes = [[r, r, 0.02]]
+        lo, hi = robot.table_aabb
+        # Furniture never moves, so log it statically: it stays valid wherever the time cursor sits.
         rr.log(
             "world/table",
-            rr.Boxes3D(
-                centers=[table_center],
-                half_sizes=half_sizes,
-                colors=[[165, 115, 65]],
-            ),
+            rr.Boxes3D(centers=[((lo + hi) / 2.0).tolist()], half_sizes=[((hi - lo) / 2.0).tolist()],
+                       colors=[[165, 115, 65]]),
+            static=True,
         )
-
-        # Ground plane at z = 0 (Steve base sits directly on ground)
         rr.log(
             "world/ground",
-            rr.Boxes3D(
-                centers=[[0.0, 0.0, -0.01]],
-                half_sizes=[[2.5, 2.5, 0.01]],
-                colors=[[210, 210, 215]],
-            ),
+            rr.Boxes3D(centers=[[0.0, 0.0, -0.01]], half_sizes=[[2.5, 2.5, 0.01]], colors=[[210, 210, 215]]),
+            static=True,
         )
 
-        # 2. Robot Links (MPO-700 Chassis + Cabinet + UR5 + Camera + Robotiq-85 Gripper)
-        shapes = env._p.getVisualShapeData(env.robot_id, physicsClientId=env.client_id)
-        self.robot_links_meta = []
-        for s in shapes:
-            link_id = s[1]
-            geom = s[2]
-            dims = s[3]
-            filename = s[4].decode("utf-8") if isinstance(s[4], bytes) else s[4]
-            local_pos, local_orn, rgba = s[5], s[6], s[7]
-
-            if filename:
-                if not os.path.isabs(filename):
-                    filename = os.path.abspath(filename)
-                if filename.endswith(".dae"):
-                    obj_cand = filename[:-4] + ".obj"
-                    if os.path.exists(obj_cand):
-                        filename = obj_cand
-                if os.path.exists(filename):
-                    rr.log(f"world/robot/link_{link_id}/mesh", rr.Asset3D(path=filename, albedo_factor=rgba))
-                    scale_vec = dims if (dims and len(dims) == 3) else (1.0, 1.0, 1.0)
-                    self.robot_links_meta.append((link_id, local_pos, local_orn, scale_vec))
-            elif geom == 3:  # Box geometry (camera sensor body, gripper pads, ee_link)
-                half_sizes = [[d / 2.0 for d in dims]]
-                rr.log(f"world/robot/link_{link_id}/box", rr.Boxes3D(half_sizes=half_sizes, colors=[rgba]))
-                self.robot_links_meta.append((link_id, local_pos, local_orn, (1.0, 1.0, 1.0)))
-
-        self.update_robot_pose(env)
+        self.urdf_tree = rr.urdf.UrdfTree.from_file_path(robot.viewer_urdf_path, entity_path_prefix="world")
+        self.urdf_tree.log_urdf_to_recording()
+        self.update_robot_pose(robot)
         self._update_metrics_hud(current_cov=0.0, total_samples=0)
 
-        # Initial benchmark tree before first view executes
         init_tree = [
             "```text",
             "Pipeline Status: Initialized",
             "├── GPU Compute [cuRobo Reachability & CUDA Ray Scoring standby]",
-            "└── CPU Host    [PyBullet Sim ready]",
+            "└── CPU Host    [Robot & Camera ready]",
             "```",
         ]
         rr.log("benchmark", rr.TextDocument("\n".join(init_tree), media_type="text/markdown"))
 
-    def update_robot_pose(self, env) -> None:
-        """Stream current 3D robot joint link poses to Rerun."""
-        if not self.enabled or not self.robot_links_meta:
+    def update_robot_pose(self, robot) -> None:
+        """Place the robot in the world and pose every joint the robot reports a value for."""
+        if not self.enabled or self.urdf_tree is None:
             return
 
-        for link_id, local_pos, local_orn, scale_vec in self.robot_links_meta:
-            if link_id == -1:
-                base_pos, base_orn = env._p.getBasePositionAndOrientation(env.robot_id, physicsClientId=env.client_id)
-                w_pos, w_orn = env._p.multiplyTransforms(base_pos, base_orn, local_pos, local_orn)
-            else:
-                st = env._p.getLinkState(env.robot_id, link_id, physicsClientId=env.client_id)
-                w_pos, w_orn = env._p.multiplyTransforms(st[4], st[5], local_pos, local_orn)
-            rr.log(f"world/robot/link_{link_id}", rr.Transform3D(translation=w_pos, quaternion=w_orn, scale=scale_vec))
+        root = self.urdf_tree.root_link().name
+        position, quaternion = robot.link_pose(root)
+        # "tf#/world" is the implicit frame of the world entity, so the URDF robot hangs off our own tree.
+        rr.log("world/robot_pose", rr.Transform3D(translation=position, quaternion=quaternion,
+                                                  parent_frame="tf#/world", child_frame=root))
+
+        values = robot.joint_values()
+        for joint in self.urdf_tree.joints():
+            if joint.name in values:
+                rr.log(f"world/robot/joints/{joint.name}", joint.compute_transform(float(values[joint.name])))
 
     def log_step(
         self,
@@ -220,7 +261,7 @@ class NBVVisualizer:
         # 3. Target Surface Coverage Samples (Green = Seen, Gray = Unseen)
         colors = np.where(tracker.seen[:, None], [50, 220, 70], [160, 160, 160]).astype(np.uint8)
         rr.log(
-            "coverage/surface_samples",
+            "world/coverage/surface_samples",
             rr.Points3D(positions=tracker.surface_points, colors=colors, radii=0.002),
         )
 
@@ -229,7 +270,7 @@ class NBVVisualizer:
             self.accumulated_clouds.append(new_cloud)
             full_cloud = np.concatenate(self.accumulated_clouds, axis=0)
             rr.log(
-                "reconstruction/point_cloud",
+                "world/reconstruction/point_cloud",
                 rr.Points3D(positions=full_cloud, colors=[240, 200, 40], radii=0.0015),
             )
 

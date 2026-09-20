@@ -20,7 +20,10 @@ from nbv_planner.observations import Observation
 from scipy.spatial.transform import Rotation
 from nbv_planner.camera import CameraIntrinsics
 from nbv_planner.config import (
+    BASE_LINK,
     DEFAULT_YCB_OBJECT,
+    EE_LINK,
+    URDF_PATH,
     ORBIT_DEPTH_FRACTION,
     WORLD_UP_Z,
     YCB_ROOT,
@@ -181,6 +184,58 @@ class SteveSimEnv:
         lo, hi = self._p.getAABB(self.obj_id, physicsClientId=self.client_id)
         dims = np.asarray(hi, dtype=float) - np.asarray(lo, dtype=float)
         return np.asarray(pos, dtype=float), np.asarray(orn, dtype=float), dims
+
+    urdf_path = URDF_PATH
+    base_link = BASE_LINK
+    ee_link = EE_LINK
+
+    @property
+    def viewer_urdf_path(self) -> str:
+        from nbv_planner.viewer_urdf import viewer_urdf_from_file
+
+        if not getattr(self, "_viewer_urdf_path", None):
+            self._viewer_urdf_path = viewer_urdf_from_file(self.urdf_path)
+        return self._viewer_urdf_path
+
+    def link_pose(self, link_name: str) -> tuple[np.ndarray, np.ndarray]:
+        """World pose of a link, by name."""
+        link = self.link_name_to_id.get(link_name)
+        if link is None:
+            pos, quat = self._p.getBasePositionAndOrientation(self.robot_id, physicsClientId=self.client_id)
+        else:
+            state = self._p.getLinkState(self.robot_id, link, computeForwardKinematics=True,
+                                         physicsClientId=self.client_id)
+            pos, quat = state[4], state[5]
+        return np.asarray(pos, dtype=float), np.asarray(quat, dtype=float)
+
+    def move_to_home(self) -> None:
+        """Return the arm to its configured home posture."""
+        self.reset_robot(self.config.robot.initial_arm_joints)
+        self._p.stepSimulation(physicsClientId=self.client_id)
+
+    def joint_values(self) -> dict[str, float]:
+        return {name: float(self._p.getJointState(self.robot_id, index, physicsClientId=self.client_id)[0])
+                for name, index in self.joint_name_to_id.items()}
+
+    def object_mesh_world(self):
+        """Ground-truth CAD mesh of the target object in world frame."""
+        from nbv_planner.coverage import load_ycb_mesh, transform_mesh
+
+        pos, orn = self._p.getBasePositionAndOrientation(self.obj_id, physicsClientId=self.client_id)
+        return transform_mesh(load_ycb_mesh(self.ycb_object), np.asarray(pos), np.asarray(orn),
+                              obj_name=self.ycb_object, is_inertial_frame=True)
+
+    def teleport_camera(self, position_world: np.ndarray, quaternion_xyzw: np.ndarray) -> None:
+        """Reset the arm so the camera sits at the given pose, using IK without motion planning."""
+        from nbv_planner.config import BASE_LINK, EE_LINK, URDF_PATH
+        from nbv_planner.reachability import ik_filter
+
+        base_position, base_quaternion = self.base_pose()
+        reachable, joints = ik_filter(URDF_PATH, BASE_LINK, EE_LINK, np.asarray(position_world)[None],
+                                      np.asarray(quaternion_xyzw)[None], base_position, base_quaternion)
+        if not reachable[0]:
+            raise ValueError("Camera pose is not reachable by IK")
+        self.reset_robot(joints[0])
 
     def camera_world_transform(self) -> np.ndarray:
         state = self._p.getLinkState(self.robot_id, self.camera_link,
