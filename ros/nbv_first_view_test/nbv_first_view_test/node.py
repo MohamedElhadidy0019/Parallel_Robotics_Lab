@@ -30,6 +30,45 @@ DEFAULT_CONFIG_PATH = os.path.join(
 MAX_FK_POSITION_ERROR_M = 0.01
 MAX_FK_ROTATION_ERROR_RAD = 0.05
 
+DEPTH_PATH = "world/start_pose/pinhole/depth"
+
+
+def send_blueprint() -> None:
+    """Replace the NBV layout with one built to show a single frame.
+
+    NBVVisualizer lays out Reconstruction, Coverage and Status HUD panels that stay empty here,
+    and its 3D view explicitly drops start_pose/pinhole/rgb, so the captured frame is logged and
+    then hidden. This package exists to show that frame, so it gets its own panels.
+    """
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    rr.send_blueprint(rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial3DView(
+                name="World and robot",
+                origin="world",
+                contents=["+ $origin/**", f"- {DEPTH_PATH}"],
+            ),
+            rrb.Vertical(
+                rrb.Spatial2DView(name="First frame (RGB)",
+                                  origin="world/start_pose/pinhole",
+                                  contents=["+ $origin/rgb"]),
+                rrb.Spatial2DView(name="First frame (depth)",
+                                  origin="world/start_pose/pinhole",
+                                  contents=["+ $origin/depth"]),
+            ),
+            column_shares=[1.6, 1.0],
+        ),
+    ))
+
+
+def log_depth(observation) -> None:
+    """Depth beside the RGB, in metres, sharing the start pose pinhole."""
+    import rerun as rr
+
+    rr.log(DEPTH_PATH, rr.DepthImage(observation.depth_m.astype("float32"), meter=1.0))
+
 
 class FirstViewNode(Node):
     def __init__(self):
@@ -110,8 +149,11 @@ class FirstViewNode(Node):
         robot.wait_for_inputs()
         self.verify_kinematics(robot)
 
-        visualizer = NBVVisualizer(self.cfg["object_name"], enabled=bool(self.param("viz")), mode="cad")
+        show = bool(self.param("viz"))
+        visualizer = NBVVisualizer(self.cfg["object_name"], enabled=show, mode="cad")
         visualizer.init_scene(robot)
+        if show:
+            send_blueprint()
 
         print("=== First view test: start pose and one frame ===", flush=True)
         print("[1/2] Moving arm to start pose with cuRobo...", flush=True)
@@ -124,6 +166,8 @@ class FirstViewNode(Node):
 
         print("[2/2] Capturing and logging the first frame...", flush=True)
         visualizer.log_start_pose(observation, look_at_world)
+        if show:
+            log_depth(observation)
         visualizer.update_robot_pose(robot)
         self.report(observation, position, look_at_world)
         print("FIRST VIEW OK", flush=True)

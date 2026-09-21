@@ -51,9 +51,13 @@ source install/setup.bash
 FIRST VIEW OK
 ```
 
-Rerun shows the table, the ground, the posed robot from its live URDF, the
-camera frustum at the start pose with the RGB image on its image plane, and the
-look-at point.
+Rerun opens with three panels: the world and robot in 3D on the left, the
+captured RGB frame top right, the depth frame below it.
+
+The package sends its own blueprint. `NBVVisualizer` lays out Reconstruction,
+Coverage and Status HUD panels that stay empty here, and its 3D view carries
+`- $origin/start_pose/pinhole/rgb`, so the captured frame is logged and then
+hidden. Reusing that layout shows the motion and no picture.
 
 Exits nonzero on failure. `keep_alive:=true` holds the viewer open after
 `FIRST VIEW OK`; Ctrl-C to quit.
