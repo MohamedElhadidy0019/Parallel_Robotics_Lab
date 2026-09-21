@@ -19,6 +19,7 @@ from nbv_planner_ros.robot_model import (
     REFIT_COLLISION_LINKS,
     REFIT_SPHERE_MAX_RADIUS_M,
     adapt_robot_config,
+    camera_link_from_handeye,
     camera_pose_errors,
     load_packaged_config,
     wait_for_robot_description,
@@ -56,6 +57,15 @@ class RosRobot:
         self.tf_listener = TransformListener(self.tf_buffer, node)
 
         self.urdf_xml = wait_for_robot_description(node)
+        # A camera published only as a static TF is invisible to cuRobo, which reads kinematics
+        # from the URDF alone. Give it a link so the planner has an end effector to plan to.
+        handeye = self.config.get("handeye_file")
+        if handeye:
+            self.urdf_xml = camera_link_from_handeye(
+                self.urdf_xml, handeye,
+                self.config["camera_mount_link"], self.camera_frame)
+            node.get_logger().info(
+                f"Injected {self.camera_frame} on {self.config['camera_mount_link']} from {handeye}")
         urdf_xml = self.urdf_xml
         self.urdf_path = write_urdf(urdf_xml)
         self.robot_config, self.base_link, self.arm_joint_names, dropped, refitted = adapt_robot_config(

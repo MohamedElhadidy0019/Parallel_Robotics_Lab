@@ -79,6 +79,46 @@ def add_missing_joint_limits(urdf_xml: str) -> str:
     return ET.tostring(root, encoding="unicode")
 
 
+def inject_camera_link(urdf_xml: str, parent: str, child: str, translation, quaternion_xyzw) -> str:
+    """Add a fixed joint placing a calibrated camera on the robot, as a real link.
+
+    A camera published only as a static TF is invisible to cuRobo, whose kinematics come from the
+    URDF alone. The planner's end effector is the camera, so without this the model has nothing to
+    plan to. Only the temporary copy handed to cuRobo is changed; the robot's own URDF is not.
+    """
+    root = ET.fromstring(urdf_xml)
+    names = {link.get("name") for link in root.findall("link")}
+    if parent not in names:
+        raise RuntimeError(f"Camera mount link {parent} is not a link of the live robot")
+    if child in names:
+        return urdf_xml
+
+    ET.SubElement(root, "link", {"name": child})
+    joint = ET.SubElement(root, "joint", {"name": f"{child}_fixed_joint", "type": "fixed"})
+    ET.SubElement(joint, "parent", {"link": parent})
+    ET.SubElement(joint, "child", {"link": child})
+    rpy = Rotation.from_quat(np.asarray(quaternion_xyzw, dtype=float)).as_euler("xyz")
+    ET.SubElement(joint, "origin", {
+        "xyz": " ".join(f"{v:.9g}" for v in np.asarray(translation, dtype=float)),
+        "rpy": " ".join(f"{v:.9g}" for v in rpy),
+    })
+    return ET.tostring(root, encoding="unicode")
+
+
+def camera_link_from_handeye(urdf_xml: str, handeye_path: str, parent: str, child: str) -> str:
+    """Inject the camera described by a hand-eye calibration JSON.
+
+    Expects the format handeye_solve.py writes: translation_m and quaternion_xyzw, giving the
+    camera's pose expressed in the mount link's frame.
+    """
+    import json
+
+    with open(handeye_path) as stream:
+        result = json.load(stream)
+    return inject_camera_link(urdf_xml, parent, child,
+                              result["translation_m"], result["quaternion_xyzw"])
+
+
 def write_urdf(urdf_xml: str, directory: str | None = None) -> str:
     """Write a cuRobo-readable copy of the live URDF."""
     directory = directory or tempfile.mkdtemp(prefix="nbv_robot_")

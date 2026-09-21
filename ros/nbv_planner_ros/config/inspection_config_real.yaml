@@ -1,0 +1,60 @@
+# Inspection settings for the real Steve: Neobotix MPO-700 + UR5e, no gripper, wrist D415.
+# Differs from inspection_config.yaml only in names and the camera injection. Every number the
+# planner reasons with is the same shape, so the sim and the robot run the same code.
+#
+# Values marked MEASURE are placeholders. Set them from the real cell before running with motion.
+
+inspection:
+  # -- Start pose, robot base frame -------------------------------------------
+  # MEASURE. The Gazebo values assume a table 0.60 m to the robot's -y. Replace both with the
+  # real cell's geometry before enabling motion.
+  start_camera_position_base: [0.0, -0.26, 1.14]
+  start_look_at_base: [0.0, -0.60, 0.80]
+
+  # -- Camera ------------------------------------------------------------------
+  # The calibrated D415 is published as a static TF, not a URDF link, so cuRobo cannot see it.
+  # handeye_file makes RosRobot add it as a real link on camera_mount_link before planning.
+  # Expects handeye_solve.py's format: translation_m and quaternion_xyzw, camera pose in the
+  # mount link's frame. Drop handeye_file and the URDF is left alone.
+  handeye_file: "/home/ws/nbv_scratch/handeye_result.json"
+  camera_mount_link: "ur5etool0"
+  camera_optical_frame: "nbv_camera_optical_frame"
+
+  color_topic: "/d415_calib/d415_calib/color/image_raw"
+  depth_topic: "/d415_calib/d415_calib/aligned_depth_to_color/image_raw"
+  camera_info_topic: "/d415_calib/d415_calib/color/camera_info"
+  camera_near: 0.1
+  camera_far: 2.5
+
+  # -- Frames -------------------------------------------------------------------
+  # There is no world frame on the real robot; the TF root is odom, which drifts with wheel
+  # odometry. base_link makes base_pose() the identity and every world-to-base conversion a
+  # no-op, which is what a static inspection wants.
+  world_frame: "base_link"
+  table_frame: "table_frame"
+  object_frame: "object_frame"
+
+  # -- Controller ----------------------------------------------------------------
+  # The e-series bringup runs the scaled controller. It stays INACTIVE until an External Control
+  # program is running on the pendant.
+  controller_action: "/scaled_joint_trajectory_controller/follow_joint_trajectory"
+  joint_states_topic: "/joint_states"
+
+  # -- Table ---------------------------------------------------------------------
+  # MEASURE. Published as a static TF by the launch file, since nothing on the real robot
+  # publishes table_frame.
+  table_height: 0.70
+  table_thickness: 0.04
+  table_depth: 0.50
+  table_width: 0.80
+
+  # -- Planning --------------------------------------------------------------------
+  max_reach: 0.85
+  speed_scale: 0.25   # slower than sim: real hardware, and the plan is not reversible
+  waypoint_dt: 0.08
+  settle_time_sec: 0.5
+  frame_timeout: 30.0
+
+  # No gripper is fitted, so the packaged Robotiq spheres drop out on their own. The cabinet
+  # refit still applies: the arm is mounted on the same MPO-700 cabinet.
+  refit_collision_links: ["cabinet_link"]
