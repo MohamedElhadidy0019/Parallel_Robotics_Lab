@@ -10,6 +10,7 @@ from gazebo_msgs.srv import SpawnEntity, DeleteEntity
 from geometry_msgs.msg import TransformStamped
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 from tf2_ros.transform_broadcaster import TransformBroadcaster
+from tf2_ros import Buffer, TransformListener
 from ament_index_python.packages import get_package_share_directory
 from steve_sim_prep.asset_manager import AssetManager
 from steve_sim_prep.table_generator import generate_table_urdf
@@ -69,6 +70,8 @@ class SteveSimPreparer(Node):
         self.del_cli = self.create_client(DeleteEntity, "/delete_entity")
         self.tf_broadcaster = StaticTransformBroadcaster(self)
         self.dynamic_tf_broadcaster = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.active_transforms = []
         self.tf_timer = None
         
@@ -103,6 +106,27 @@ class SteveSimPreparer(Node):
         table_y = float(d_pose.get("y", 0.00))
         table_z = float(d_pose.get("z", 0.00))
         table_yaw = float(d_pose.get("yaw", 0.00))
+
+        # Check if robot is near origin (0, 0) and CLI did not pass table_x/y
+        p_tx = self.get_parameter("table_x").get_parameter_value().double_value
+        p_ty = self.get_parameter("table_y").get_parameter_value().double_value
+        if math.isnan(p_tx) and math.isnan(p_ty):
+            for _ in range(15):
+                rclpy.spin_once(self, timeout_sec=0.05)
+                try:
+                    tf = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time())
+                    rx = tf.transform.translation.x
+                    ry = tf.transform.translation.y
+                    if abs(rx) < 0.5 and abs(ry) < 0.5:
+                        table_x = rx
+                        table_y = ry + 0.60
+                        table_yaw = 0.0
+                        self.get_logger().info(
+                            f"Auto-aligning table to robot at origin: ({table_x:.2f}, {table_y:.2f})"
+                        )
+                    break
+                except Exception:
+                    pass
 
         # Apply CLI parameter overrides if passed
         p_shape = self.get_parameter("table_shape").get_parameter_value().string_value
@@ -221,6 +245,37 @@ class SteveSimPreparer(Node):
         self.active_transforms.append(t)
         self.get_logger().info(f"Registered TF: {parent} -> {child}")
 
+    def model_pose(self, name):
+        """Where Gazebo actually has the model right now, as (x, y, z, roll, pitch, yaw)."""
+        import subprocess
+
+        try:
+            output = subprocess.run(["gz", "model", "-m", name, "-p"], capture_output=True, text=True, timeout=5.0)
+            values = [float(v) for v in output.stdout.split()]
+        except Exception:
+            return None
+        return values if len(values) == 6 else None
+
+    def track_model_frame(self, name, child):
+        """Keep a TF frame on the settled pose of a spawned model, which physics may have nudged."""
+        pose = self.model_pose(name)
+        if pose is None:
+            self.get_logger().warn(f"Could not read the pose of {name}; {child} stays at its spawn pose")
+            return
+        for transform in self.active_transforms:
+            if transform.child_frame_id == child:
+                x, y, z, roll, pitch, yaw = pose
+                q = euler_to_quaternion(roll, pitch, yaw)
+                transform.transform.translation.x = x
+                transform.transform.translation.y = y
+                transform.transform.translation.z = z
+                transform.transform.rotation.x, transform.transform.rotation.y = q[0], q[1]
+                transform.transform.rotation.z, transform.transform.rotation.w = q[2], q[3]
+                self.get_logger().info(
+                    f"{child} tracks {name} at ({x:.3f}, {y:.3f}, {z:.3f}), yaw {math.degrees(yaw):.1f} deg"
+                )
+                return
+
     def broadcast_all_tf(self):
         now = self.get_clock().now().to_msg()
         for t in self.active_transforms:
@@ -326,9 +381,15 @@ def main():
     node.add_tf("world", "table_frame", t_cfg["x"], t_cfg["y"], t_cfg["z"], yaw=yaw_rad)
     node.add_tf("world", "object_frame", obj_x, obj_y, obj_z)
     node.broadcast_all_tf()
+
+    # The object settles after spawning, so publish where it came to rest, not where it was dropped.
+    # Read it once: polling Gazebo's transport in a loop destabilises gzserver.
+    time.sleep(3.0)
+    node.track_model_frame(entity_name, "object_frame")
+    node.broadcast_all_tf()
     node.tf_timer = node.create_timer(0.1, node.broadcast_all_tf)
 
-    node.get_logger().info("=== Scene Preparation Complete! Spinning for TF broadcast ===")
+    node.get_logger().info("=== Scene Preparation Complete! ===")
 
     try:
         rclpy.spin(node)

@@ -80,6 +80,13 @@ START_SAFETY_RADIUS_M      = 0.15   # box kept clear around the look-at point wh
 START_ROTATION_TOL_RAD     = 0.05
 START_PLAN_ATTEMPTS        = 3      # trajectory optimisation is seeded randomly, so retry a blocked start pose
 
+# One hardcoded start pose is a single point of failure: a base or table the planner models
+# differently from the scene makes it unreachable and the whole run dies before stage 2. These
+# describe a fallback ring around it, all still aimed at the same look-at point.
+START_FALLBACK_RADIUS_STEPS_M  = (0.0, 0.08, 0.16)   # pushed away from the look-at point
+START_FALLBACK_ELEVATION_STEPS = (0.0, 10.0, -10.0, 20.0)  # degrees added to the configured elevation
+START_FALLBACK_AZIMUTH_STEPS   = (0.0, 25.0, -25.0, 50.0, -50.0)  # degrees around the look-at point
+
 # -- Scan vs CAD alignment (mode "both") -----------------------------------------
 
 ALIGN_MAX_CENTER_ERROR_M   = 0.015  # scanned box center vs CAD box center

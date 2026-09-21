@@ -1,0 +1,39 @@
+# Inspection settings for Steve in ROS 2 Gazebo.
+# Start pose is in the robot base frame. The Gazebo table sits to the robot's right (-y) when
+# prepare_sim runs with table_y:=-1.1; the PyBullet scene puts it in front (+x) instead.
+# The camera sits at the base's -y edge, 45 degrees above the object, clear of the cabinet.
+
+inspection:
+  start_camera_position_base: [0.0, -0.26, 1.14]
+  start_look_at_base: [0.0, -0.60, 0.80]
+
+  # The packaged cabinet spheres leave 38% of the base unmodelled, so cuRobo plans paths that
+  # drive the arm through it and Gazebo aborts the trajectory. Refit them from the live mesh.
+  refit_collision_links: ["cabinet_link"]
+
+  table_height: 0.70
+  table_thickness: 0.04
+  table_depth: 0.50
+  table_width: 0.80
+  max_reach: 0.85
+
+  # Uniform time dilation of the planned trajectory. cuRobo times its samples to sit on the joint
+  # velocity and acceleration limits; Gazebo tracks them more reliably with headroom.
+  speed_scale: 0.5
+
+  camera_near: 0.1
+  camera_far: 2.5
+  waypoint_dt: 0.08
+  settle_time_sec: 0.5
+  frame_timeout: 30.0   # Gazebo slows to a crawl while cuRobo plans, so a frame can take many wall seconds
+
+  joint_states_topic: "/joint_states"
+  depth_topic: "/camera/depth/image_rect_raw"
+  color_topic: "/camera/color/image_raw"
+  camera_info_topic: "/camera/depth/camera_info"
+  controller_action: "/joint_trajectory_controller/follow_joint_trajectory"
+
+  world_frame: "world"
+  table_frame: "table_frame"
+  object_frame: "object_frame"
+  camera_optical_frame: "camera_depth_optical_frame"

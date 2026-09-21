@@ -28,7 +28,15 @@ def view_in_rerun(path: str) -> None:
     """View point cloud or mesh in Rerun interactive 3D viewer."""
     import rerun as rr
 
-    rr.init("scan_viewer", spawn=True)
+    rr.init("scan_viewer")
+    addr = os.environ.get("RERUN_ADDR", os.environ.get("RERUN_SERVER", "127.0.0.1:9876"))
+    try:
+        rr.connect(addr)
+    except Exception:
+        try:
+            rr.spawn()
+        except Exception:
+            pass
     if "coverage" in path:
         mesh = o3d.io.read_triangle_mesh(path)
         vertices = np.asarray(mesh.vertices, dtype=np.float32)

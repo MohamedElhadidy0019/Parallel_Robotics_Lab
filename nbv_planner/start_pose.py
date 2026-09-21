@@ -33,3 +33,46 @@ def pose_errors(world_from_camera: np.ndarray, position: np.ndarray, quaternion_
     position_error = float(np.linalg.norm(world_from_camera[:3, 3] - np.asarray(position)))
     rotation = Rotation.from_matrix(world_from_camera[:3, :3]).inv() * Rotation.from_quat(quaternion_xyzw)
     return position_error, float(rotation.magnitude())
+
+def start_pose_candidates(
+    position_base: np.ndarray,
+    look_at_base: np.ndarray,
+    radius_steps_m,
+    elevation_steps_deg,
+    azimuth_steps_deg,
+) -> list[np.ndarray]:
+    """The configured start position first, then a ring of nearby ones, all facing the same point.
+
+    A single configured pose is a single point of failure: whenever the planner models the base or
+    the table differently from the scene, that one pose is unreachable and the run ends before it
+    starts. Ordered so the configured pose always wins when it plans, and neighbours are tried
+    nearest-first.
+    """
+    position_base = np.asarray(position_base, dtype=float)
+    look_at_base = np.asarray(look_at_base, dtype=float)
+    offset = position_base - look_at_base
+    radius = float(np.linalg.norm(offset))
+    if radius < 1e-6:
+        raise ValueError("Start pose position and look-at point must differ")
+
+    ground = float(np.linalg.norm(offset[:2]))
+    azimuth = np.arctan2(offset[1], offset[0])
+    elevation = np.arctan2(offset[2], ground)
+
+    candidates, seen = [], set()
+    for extra_radius in radius_steps_m:
+        for extra_elevation in elevation_steps_deg:
+            for extra_azimuth in azimuth_steps_deg:
+                r = radius + extra_radius
+                phi = elevation + np.radians(extra_elevation)
+                theta = azimuth + np.radians(extra_azimuth)
+                candidate = look_at_base + r * np.array([
+                    np.cos(phi) * np.cos(theta),
+                    np.cos(phi) * np.sin(theta),
+                    np.sin(phi),
+                ])
+                key = tuple(np.round(candidate, 4))
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(candidate)
+    return candidates

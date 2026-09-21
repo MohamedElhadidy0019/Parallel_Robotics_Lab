@@ -21,6 +21,9 @@ from nbv_planner.config import (
     ROBOT_SELF_FILTER_MIN_DEPTH_M,
     START_CAMERA_POSITION_BASE,
     START_LOOK_AT_BASE,
+    START_FALLBACK_AZIMUTH_STEPS,
+    START_FALLBACK_ELEVATION_STEPS,
+    START_FALLBACK_RADIUS_STEPS_M,
     START_PLAN_ATTEMPTS,
     START_ROTATION_TOL_RAD,
     START_SAFETY_RADIUS_M,
@@ -34,7 +37,7 @@ from nbv_planner.object_estimate import mesh_alignment
 from nbv_planner.object_scan import box_world_config, scan_object
 from nbv_planner.ray_scoring import score_candidate_views
 from nbv_planner.reachability import ik_filter, sample_candidate_camera_poses
-from nbv_planner.start_pose import pose_errors, start_camera_pose_world
+from nbv_planner.start_pose import pose_errors, start_camera_pose_world, start_pose_candidates
 from nbv_planner.viz import NBVVisualizer
 
 
@@ -67,15 +70,15 @@ def _reach_start_pose(
     look_at_base: np.ndarray,
     visualizer: NBVVisualizer,
 ):
-    """Plan with cuRobo to the start pose (camera facing the look-at point), drive there, and verify.
+    """Drive the camera to the configured start pose, or the nearest neighbour that plans.
 
     Returns (camera position world, camera quaternion world, look-at point world, observation at the start pose).
     """
     t_base, q_base = robot.base_pose()
-    t_start, q_start, look_at_world = start_camera_pose_world(start_position_base, look_at_base, t_base, q_base)
+    lo, hi = robot.table_aabb
+    _, _, look_at_world = start_camera_pose_world(start_position_base, look_at_base, t_base, q_base)
 
     # The object is not known yet: keep a conservative box around the look-at point clear of the arm.
-    lo, hi = robot.table_aabb
     world_cfg = build_world_config(
         t_base_world=t_base,
         q_base_world_xyzw=q_base,
@@ -85,43 +88,69 @@ def _reach_start_pose(
         q_obj_world_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
         obj_dims=np.full(3, 2.0 * START_SAFETY_RADIUS_M),
     )
-    # Trajectory optimisation is seeded randomly, so a blocked first attempt is worth retrying.
-    for attempt in range(START_PLAN_ATTEMPTS):
-        ok, _, trajectory, opt_ms = plan_motion_batch(
-            t_targets_world=t_start[None, :],
-            q_targets_world=q_start[None, :],
-            current_joints=robot.current_arm_joints(),
-            t_base_world=t_base,
-            q_base_world_xyzw=q_base,
-            world_config=world_cfg,
-            arm_joint_names=robot.arm_joint_names,
-            enable_graph=attempt > 0,
-        )
-        if ok and trajectory is not None:
-            t_exec_0 = time.perf_counter()
-            robot.execute_trajectory(trajectory, visualizer=visualizer)
-            exec_ms = (time.perf_counter() - t_exec_0) * 1000.0
-            pos_err, rot_err = pose_errors(robot.camera_world_transform(), t_start, q_start)
-            if pos_err <= MAX_POSE_ERROR_M and rot_err <= START_ROTATION_TOL_RAD:
-                break
-            reason = f"arm stopped {pos_err * 1000:.1f} mm / {np.degrees(rot_err):.1f} deg away"
+
+    candidates = start_pose_candidates(
+        start_position_base,
+        look_at_base,
+        START_FALLBACK_RADIUS_STEPS_M,
+        START_FALLBACK_ELEVATION_STEPS,
+        START_FALLBACK_AZIMUTH_STEPS,
+    )
+    reason = "no candidate was tried"
+
+    for candidate_idx, position_base in enumerate(candidates):
+        t_start, q_start, _ = start_camera_pose_world(position_base, look_at_base, t_base, q_base)
+        # Trajectory optimisation is seeded randomly, so the configured pose is worth retrying.
+        # Fallbacks get one shot each: there are dozens of them, and re-seeding every one costs
+        # far more than simply moving on to the next.
+        for attempt in range(START_PLAN_ATTEMPTS if candidate_idx == 0 else 1):
+            ok, _, trajectory, opt_ms = plan_motion_batch(
+                t_targets_world=t_start[None, :],
+                q_targets_world=q_start[None, :],
+                current_joints=robot.current_arm_joints(),
+                t_base_world=t_base,
+                q_base_world_xyzw=q_base,
+                world_config=world_cfg,
+                arm_joint_names=robot.arm_joint_names,
+                enable_graph=attempt > 0,
+            )
+            if ok and trajectory is not None:
+                t_exec_0 = time.perf_counter()
+                robot.execute_trajectory(trajectory, visualizer=visualizer)
+                exec_ms = (time.perf_counter() - t_exec_0) * 1000.0
+                pos_err, rot_err = pose_errors(robot.camera_world_transform(), t_start, q_start)
+                if pos_err <= MAX_POSE_ERROR_M and rot_err <= START_ROTATION_TOL_RAD:
+                    break
+                reason = f"arm stopped {pos_err * 1000:.1f} mm / {np.degrees(rot_err):.1f} deg away"
+            else:
+                reason = "no collision-free path"
+            print(
+                f"      Start pose {candidate_idx + 1}/{len(candidates)} "
+                f"{np.round(position_base, 3).tolist()} attempt {attempt + 1}/{START_PLAN_ATTEMPTS}: "
+                f"{reason}, retrying...",
+                flush=True,
+            )
+            # No recovery motion between attempts. Driving to home meant a straight line in joint
+            # space with nothing checking it, which is how the arm ended up inside the table and
+            # every later goal came back PATH_TOLERANCE_VIOLATED. The next candidate plans from
+            # wherever the arm actually is.
         else:
-            reason = "no collision-free path"
-        print(f"      Start pose attempt {attempt + 1}/{START_PLAN_ATTEMPTS}: {reason}, retrying...", flush=True)
-        # A pose left over from an earlier scan can box the arm in; the home configuration is known clear.
-        robot.move_to_home()
+            continue
+        break
     else:
         raise RuntimeError(
             f"Could not reach the start pose {np.round(start_position_base, 3).tolist()} looking at "
-            f"{np.round(look_at_base, 3).tolist()} (base frame): {reason}. Adjust --start-pos / --look-at."
+            f"{np.round(look_at_base, 3).tolist()} (base frame), nor any of {len(candidates) - 1} "
+            f"nearby poses: {reason}. Adjust --start-pos / --look-at."
         )
 
     observation = robot.capture_observation()
     distance = np.linalg.norm(look_at_world - t_start)
     offset = t_start - look_at_world
     elevation = np.degrees(np.arctan2(offset[2], np.linalg.norm(offset[:2])))
+    moved = "" if candidate_idx == 0 else f" (fell back to candidate {candidate_idx + 1}/{len(candidates)})"
     print(
-        f"      Reached start pose: camera at ({t_start[0]:.3f}, {t_start[1]:.3f}, {t_start[2]:.3f}) facing "
+        f"      Reached start pose{moved}: camera at ({t_start[0]:.3f}, {t_start[1]:.3f}, {t_start[2]:.3f}) facing "
         f"({look_at_world[0]:.3f}, {look_at_world[1]:.3f}, {look_at_world[2]:.3f}) | {distance:.2f} m, "
         f"{elevation:.0f} deg elevation | error {pos_err * 1000:.1f} mm / {np.degrees(rot_err):.1f} deg | "
         f"plan {opt_ms:.0f} ms, drive {exec_ms:.0f} ms"

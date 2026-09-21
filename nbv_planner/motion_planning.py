@@ -36,6 +36,7 @@ _MOTION_GEN = None
 _MOTION_GEN_WARMUP_MS = 0.0
 _KINEMATICS = None
 _ROBOT_MODEL = {"urdf_path": None, "config": None}
+_LAST_PLAN_DT = None
 
 
 def set_robot_model(urdf_path: str | None = None, robot_config: dict | None = None) -> None:
@@ -49,6 +50,16 @@ def set_robot_model(urdf_path: str | None = None, robot_config: dict | None = No
 
 def robot_urdf_path() -> str:
     return _ROBOT_MODEL["urdf_path"] or URDF_PATH
+
+
+def last_plan_interpolation_dt() -> float | None:
+    """Seconds between samples of the most recent plan, as cuRobo timed it.
+
+    Trajectory optimisation rescales dt to sit on the velocity and acceleration limits, so the
+    value configured on MotionGen is not the one the returned samples are spaced by. Replaying
+    them at any other rate asks the arm for speeds the plan never checked.
+    """
+    return _LAST_PLAN_DT
 
 
 def get_motion_gen_warmup_ms() -> float:
@@ -263,6 +274,9 @@ def plan_motion_batch(
         joint_names=list(arm_joint_names),
     )
 
+    global _LAST_PLAN_DT
+    _LAST_PLAN_DT = None
+
     t_opt_0 = time.perf_counter()
     try:
         result = motion_gen.plan_batch(
@@ -274,11 +288,15 @@ def plan_motion_batch(
                 enable_graph_attempt=1 if enable_graph else None,
             ),
         )
-    except RuntimeError as error:
-        # cuRobo can fail merging retry attempts; treat it as a blocked batch rather than losing the scan.
-        print(f"[cuRobo batch opt error] {error}", flush=True)
+    except (RuntimeError, IndexError) as error:
+        # Merging retry attempts inside cuRobo indexes a scalar tensor when an attempt produced no
+        # per-candidate errors, which raises IndexError, not RuntimeError. Either way the batch is
+        # blocked, and losing the whole scan over one unreachable ring slot is the wrong trade.
+        print(f"[cuRobo batch opt error] {type(error).__name__}: {error}", flush=True)
         return False, -1, None, (time.perf_counter() - t_opt_0) * 1000.0
     opt_ms = (time.perf_counter() - t_opt_0) * 1000.0
+
+    _LAST_PLAN_DT = float(result.interpolation_dt) if getattr(result, "interpolation_dt", None) else None
 
     succ_idx = torch.where(result.success)[0]
     if len(succ_idx) == 0:

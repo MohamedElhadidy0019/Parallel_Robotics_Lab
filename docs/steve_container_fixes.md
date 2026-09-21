@@ -63,10 +63,18 @@ In `/home/ws/src/neo_simulation2/components/arm/robotiq_gripper.urdf.xacro`, rep
         <origin xyz="0 0 0" rpy="0 0 -${pi / 2}"/>
     </xacro:robotiq_gripper>
 
-    <!-- Wrist-mounted RealSense D435 Depth Camera -->
+    <!-- Define ee_link matching steve.urdf kinematics -->
+    <link name="$(arg tf_prefix)ee_link"/>
+    <joint name="$(arg tf_prefix)ee_fixed_joint" type="fixed">
+        <parent link="$(arg tf_prefix)wrist_3_link"/>
+        <child link="$(arg tf_prefix)ee_link"/>
+        <origin xyz="0.0 0.0823 0.0" rpy="0.0 0.0 1.57079632679"/>
+    </joint>
+
+    <!-- Wrist-mounted RealSense D435 Depth Camera attached to ee_link -->
     <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro"/>
-    <xacro:sensor_d435 parent="$(arg tf_prefix)tool0" name="camera" use_nominal_extrinsics="true">
-        <origin xyz="0.02 0.0 -0.06" rpy="1.5707963 3.14159265 1.5707963"/>
+    <xacro:sensor_d435 parent="$(arg tf_prefix)ee_link" name="camera" use_nominal_extrinsics="true">
+        <origin xyz="0.02 0.0 -0.06" rpy="0 0 0"/>
     </xacro:sensor_d435>
 
     <gazebo reference="camera_link">
@@ -203,15 +211,98 @@ source /etc/profile.d/cuda.sh
 # 2. PyTorch, Warp, & 3D Geometry Libraries
 pip install --upgrade pip
 pip install torch==2.4.1+cu121 torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install "numpy<2.0" ninja warp-lang trimesh open3d rerun-sdk
+pip install "numpy>=2" ninja warp-lang trimesh open3d rerun-sdk
 
 # 3. Build & Install cuRobo with Native CUDA Kernels
 git clone https://github.com/NVlabs/curobo.git /tmp/curobo
 cd /tmp/curobo
 export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9"
-pip install --no-build-isolation -e .
+pip install --no-build-isolation .   # not -e: cuRobo has no PEP 660 build_editable hook
 
 # 4. Verify Stack
 python3 -c "import torch; print('PyTorch CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 python3 -c "import curobo; print('cuRobo:', curobo.__version__)"
 ```
+
+---
+
+## 7. SAM2 Segmentation (scan / both modes)
+
+`--mode scan` and `--mode both` need SAM2. The container ships neither the package nor the
+checkpoint, and `scripts/sync_ros_workspace.sh` only rsyncs `nbv_planner/`, so `checkpoints/`
+never arrives.
+
+```bash
+# 1. Runtime dependencies SAM2 imports but does not vendor
+pip install --no-cache-dir opencv-python hydra-core omegaconf iopath
+
+# 2. SAM2 itself, WITHOUT its dependency resolution
+pip install --no-cache-dir --no-deps --no-build-isolation \
+  "git+https://github.com/facebookresearch/sam2.git"
+
+# 3. Verify torch was not replaced
+python3 -c "import torch; print(torch.__version__)"                      # must stay 2.4.1+cu121
+python3 -c "from curobo.curobolib import kinematics_fused_cu; print('curobo ok')"
+python3 -c "import sam2; print(sam2.__file__)"
+```
+
+Then copy the checkpoint in from the host:
+
+```bash
+docker cp <repo>/checkpoints <container>:/home/ws/src/parallel_robotics_lab/checkpoints
+```
+
+### Why `--no-deps` is mandatory
+
+SAM2 declares an unpinned `torch` requirement. Installing it normally pulls the newest wheel
+(torch 2.14.0+cu130), which silently replaces the pinned 2.4.1+cu121 from section 6. cuRobo's
+prebuilt kernels were compiled against 2.4.1 and then fail with:
+
+```
+ImportError: kinematics_fused_cu...so: undefined symbol:
+  _ZN3c104cuda29c10_cuda_check_implementationEiPKcS2_ib
+```
+
+cuRobo falls back to JIT compiling, which also fails (`check_cuda.h: No such file or directory`)
+because its headers are not on the include path. The whole inspection node dies at
+`_verify_camera_kinematics`, long before any segmentation runs.
+
+Recovery if torch was already clobbered:
+
+```bash
+pip install --no-cache-dir --force-reinstall \
+  torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cu121
+```
+
+### Notes
+
+- The package installs under the name `SAM-2`, so `pip install "sam2 @ git+..."` fails with
+  `inconsistent name: filename has 'sam2', but metadata has 'sam-2'`. Use the bare git URL.
+- `pip install --user` writes to `/home/djyjyh/.local`, which is bind-mounted from the host.
+  Breakage there follows you across container rebuilds.
+- `inspect.launch.py` does not forward `segmenter` or `scan_views` to the node, so those stay at
+  their node defaults (`sam`, 8). To override, run the node directly:
+
+```bash
+ros2 run nbv_planner_ros inspection_node --ros-args \
+  -p mode:=scan -p segmenter:=depth -p object_name:=mustard_bottle
+```
+
+### numpy
+
+Do not pin `numpy<2.0`. torch 2.4.1+cu121, cuRobo, open3d and rerun-sdk 0.36.1 all run on
+numpy 2.x, and rerun-sdk and opencv-python both *require* `numpy>=2`. Downgrading only creates
+conflicts.
+
+Working combination, verified in the container and on the host:
+
+```
+torch       2.4.1+cu121
+torchvision 0.19.1+cu121
+numpy       2.2.6
+rerun-sdk   0.36.1
+SAM-2       1.0
+```
+
+The `sam-2 1.0 requires torch>=2.5.1` pip warning is cosmetic. It is a declared floor SAM2 does
+not actually exercise; the same pairing runs on the host.

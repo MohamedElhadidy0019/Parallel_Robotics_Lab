@@ -5,7 +5,6 @@ from typing import Callable
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from nbv_planner.config import BASE_LINK, EE_LINK, URDF_PATH
 from nbv_planner.detection import Detection, Segmenter, TableBox, detect_object
 from nbv_planner.motion_planning import build_world_config
 from nbv_planner.object_estimate import ObjectEstimate
@@ -53,7 +52,10 @@ def scan_object(
     slots, positions, quaternions = ring_viewpoints(
         estimate.box, robot.intrinsics, observation.camera_position, n_views
     )
-    reachable, _ = ik_filter(URDF_PATH, BASE_LINK, EE_LINK, positions, quaternions, base_position, base_quaternion)
+    # The robot carries its own model. The packaged constants point at the PyBullet URDF, which
+    # does not exist beside a live ROS robot and names links that robot does not have.
+    reachable, _ = ik_filter(robot.urdf_path, robot.base_link, robot.ee_link,
+                             positions, quaternions, base_position, base_quaternion)
     if on_views:
         on_views(positions[reachable])
 
