@@ -141,9 +141,33 @@ ros2 launch nbv_planner_ros inspect.launch.py mode:=cad max_views:=2 viz:=false
 
 ---
 
-## Start pose only
+## Test packages
 
-To test reaching the start pose without running any planning:
+Both run after terminals 1 and 2, in place of terminal 3.
+
+### nbv_first_view_test
+
+Start pose plus the first RGB-D frame in Rerun. Nothing else. Use this first
+when something is broken: it runs the same `RosRobot`, `_reach_start_pose` and
+`NBVVisualizer` the inspection node uses, so a pass means the production path
+works up to the first image.
+
+```bash
+ros2 launch nbv_first_view_test first_view.launch.py
+```
+
+Rerun shows the world and robot in 3D, the captured RGB frame, and depth beside
+it. Reports `FIRST VIEW OK` and exits nonzero on failure.
+
+```bash
+ros2 launch nbv_first_view_test first_view.launch.py viz:=false keep_alive:=false
+```
+
+### nbv_start_pose_test
+
+Start pose only, with its own motion code rather than the pipeline's. Useful for
+isolating whether a problem is in the pipeline or in the robot and controller.
+Captures no camera frames.
 
 ```bash
 ros2 launch nbv_start_pose_test start_pose.launch.py keep_alive:=false viz:=false
@@ -156,6 +180,14 @@ ros2 launch nbv_start_pose_test start_pose.launch.py plan_only:=true keep_alive:
 ```
 
 Reports `START POSE REACHED` on success and exits nonzero on failure.
+
+Build either one:
+
+```bash
+cd /home/ws && source /opt/ros/humble/setup.bash && source install/setup.bash
+colcon build --symlink-install --packages-select nbv_first_view_test
+source install/setup.bash
+```
 
 ---
 
