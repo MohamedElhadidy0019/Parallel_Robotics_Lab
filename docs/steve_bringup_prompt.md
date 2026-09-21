@@ -109,3 +109,7 @@ All four frames must resolve. `object_frame` missing means step 5 did not run or
 - Install anything unpinned that depends on torch. An unpinned install once pulled
   torch 2.14 over the pinned 2.4.1+cu121 and broke cuRobo's prebuilt kernels.
 - Launch the inspection node. That is a separate task, after this one reports success.
+
+## Next
+
+`docs/steve_run_inspection.md` covers running the planner once this reports success.
