@@ -8,8 +8,9 @@ import trimesh
 
 from nbv_planner.config import YCB_ROOT
 
-DEFAULT_SEEN_DISTANCE_THRESHOLD_M = 0.008
+DEFAULT_SEEN_DISTANCE_THRESHOLD_M = 0.005
 DEFAULT_NORMAL_CONSISTENCY_MIN = -0.2
+DEPTH_NOISE_FLOOR_M = 0.005
 DEFAULT_N_SURFACE_SAMPLES = 4000
 DEFAULT_BASE_EXCLUSION_MARGIN_M = 0.003
 
@@ -141,24 +142,27 @@ class CoverageTracker:
         if len(captured) == 0 or len(self.surface_points) == 0:
             return 0
 
-        distances, nearest_idx = self._tree.query(captured)
+        # Ask, per surface sample, whether the capture reached it. Querying the other way round
+        # only marks samples that win a nearest-neighbour contest, so samples closer together
+        # than the threshold shadow each other and stay unseen however well they were imaged.
+        distances, nearest_idx = cKDTree(captured).query(self.surface_points)
         within_dist = distances < self.seen_distance_threshold_m
 
         if not np.any(within_dist):
             return 0
 
         # Normal consistency check
-        surf_pts = self.surface_points[nearest_idx[within_dist]]
-        surf_normals = self.surface_normals[nearest_idx[within_dist]]
-        offsets = captured[within_dist] - surf_pts
+        surf_pts = self.surface_points[within_dist]
+        surf_normals = self.surface_normals[within_dist]
+        offsets = captured[nearest_idx[within_dist]] - surf_pts
         norms = np.linalg.norm(offsets, axis=-1, keepdims=True)
         norms_safe = np.maximum(norms, 1e-6)
 
         # Allow points very close to surface regardless of offset direction noise
         dot = np.sum((offsets / norms_safe) * surf_normals, axis=-1)
-        valid_mask = (distances[within_dist] < 0.001) | (dot >= self.normal_consistency_min)
+        valid_mask = (distances[within_dist] < DEPTH_NOISE_FLOOR_M) | (dot >= self.normal_consistency_min)
 
-        new_seen_idx = nearest_idx[within_dist][valid_mask]
+        new_seen_idx = np.flatnonzero(within_dist)[valid_mask]
         before = self.seen.sum()
         self.seen[new_seen_idx] = True
         return int(self.seen.sum() - before)
