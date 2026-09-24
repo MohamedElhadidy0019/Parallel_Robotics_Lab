@@ -7,19 +7,23 @@ import warnings
 import numpy as np
 import rclpy
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
 from nbv_planner.pipeline import run_inspection
 from nbv_planner.viz import NBVVisualizer
 from nbv_planner_ros.ros_robot import RosRobot
-
-DEFAULT_CONFIG_PATH = os.path.join(
-    get_package_share_directory("nbv_planner_ros"), "config", "inspection_config.yaml")
+from nbv_planner_ros.targets import (
+    CONFIG_FOR_TARGET,
+    DryRunStop,
+    apply_clock,
+    check_target_matches_graph,
+    prepare_real_motion,
+    validate_mode,
+    validate_target,
+)
 
 MAX_FK_POSITION_ERROR_M = 0.01
 MAX_FK_ROTATION_ERROR_RAD = 0.05
@@ -27,12 +31,10 @@ MAX_FK_ROTATION_ERROR_RAD = 0.05
 
 class InspectionNode(Node):
     def __init__(self):
-        # rclpy's TimeSource declares use_sim_time (default False) before this constructor runs, so
-        # the usual has_parameter guard never fires and the node stamps goals in wall time while
-        # Gazebo runs on /clock. The controller then schedules them decades out and nothing moves.
-        super().__init__("nbv_inspection_node",
-                         parameter_overrides=[Parameter("use_sim_time", value=True)])
-        self.declare_parameter("config_file", DEFAULT_CONFIG_PATH)
+        super().__init__("nbv_inspection_node")
+        self.declare_parameter("target", "sim")
+        self.declare_parameter("confirm", "")
+        self.declare_parameter("config_file", "")
         self.declare_parameter("object_name", "mustard_bottle")
         self.declare_parameter("mode", "cad")
         self.declare_parameter("max_views", 8)
@@ -41,6 +43,9 @@ class InspectionNode(Node):
         self.declare_parameter("segmenter", "sam")
         self.declare_parameter("viz", True)
 
+        self.target = validate_target(self.get_parameter("target").value)
+        validate_mode(self.target, self.get_parameter("mode").value)
+        apply_clock(self, self.target)
         self.cfg = self._load_config()
         self.cfg["object_name"] = self.get_parameter("object_name").get_parameter_value().string_value
         self.worker = threading.Thread(target=self._run, daemon=True)
@@ -52,9 +57,7 @@ class InspectionNode(Node):
         Running without it used to fall back to literals aimed at the robot's +y side, where the
         Gazebo table is not, and to a home posture the arm does not spawn in.
         """
-        path = self.get_parameter("config_file").get_parameter_value().string_value
-        if not path:
-            raise RuntimeError("config_file is empty; pass an inspection YAML")
+        path = self.get_parameter("config_file").get_parameter_value().string_value or CONFIG_FOR_TARGET[self.target]
         if not os.path.isfile(path):
             raise RuntimeError(f"config_file not found: {path}")
         with open(path, "r") as f:
@@ -62,10 +65,12 @@ class InspectionNode(Node):
         for key in ("start_camera_position_base", "start_look_at_base"):
             if key not in config:
                 raise RuntimeError(f"{path} is missing inspection.{key}")
-        self.get_logger().info(f"Loaded inspection config: {path}")
+        self.get_logger().info(f"Target: {self.target} | config: {path}")
         return config
 
     def _verify_camera_kinematics(self, robot: RosRobot) -> None:
+        # Joints and TF are sampled independently, so a moving arm reports only the delay between them.
+        robot.wait_until_still()
         position_error, rotation_error = robot.camera_kinematics_error()
         message = (f"Camera kinematics check: {position_error * 1000:.1f} mm, "
                    f"{np.degrees(rotation_error):.2f} deg against TF")
@@ -77,6 +82,9 @@ class InspectionNode(Node):
         try:
             parameter = lambda name: self.get_parameter(name).get_parameter_value()
             self.get_logger().info("Adopting the live robot description...")
+            check_target_matches_graph(self, self.target)
+            if self.target == "real":
+                prepare_real_motion(self, self.cfg, parameter("confirm").string_value)
             robot = RosRobot(self, self.cfg)
             robot.wait_for_inputs()
             self._verify_camera_kinematics(robot)
@@ -95,6 +103,8 @@ class InspectionNode(Node):
                 scan_views=parameter("scan_views").integer_value,
             )
             self.get_logger().info(f"Inspection result: {result}")
+        except DryRunStop as plan:
+            self.get_logger().info(f"DRY RUN OK, the arm did not move: {plan}")
         except Exception as error:
             import traceback
             self.get_logger().error(f"Inspection failed: {error}\n{traceback.format_exc()}")

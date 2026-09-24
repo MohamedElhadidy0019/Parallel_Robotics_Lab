@@ -8,10 +8,16 @@ from rclpy.node import Node
 from builtin_interfaces.msg import Duration
 from control_msgs.action import FollowJointTrajectory
 from control_msgs.msg import JointTolerance
+from std_msgs.msg import Float64
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 DEFAULT_PATH_TOLERANCE_RAD = 0.15
 DEFAULT_GOAL_TOLERANCE_RAD = 0.02
+
+# The timeout counts trajectory time, not wall time: a UR runs its trajectory slower by the pendant
+# speed slider. A stopped arm still advances the count at this rate, so a paused robot times out
+# after ten times the budget instead of never.
+MIN_PROGRESS_RATE = 0.1
 
 
 def duration(seconds: float) -> Duration:
@@ -36,11 +42,17 @@ class TrajectoryClient:
         node: Node,
         action_name: str = "/joint_trajectory_controller/follow_joint_trajectory",
         joint_names: tuple[str, ...] = DEFAULT_JOINTS,
+        speed_scaling_topic: str | None = None,
     ):
         self.node = node
         self.action_name = action_name
         self.joint_names = list(joint_names)
         self.client = ActionClient(self.node, FollowJointTrajectory, self.action_name)
+        self.speed_scaling = 1.0
+        if speed_scaling_topic:
+            # ur_robot_driver publishes the slider in percent.
+            node.create_subscription(Float64, speed_scaling_topic,
+                                     lambda msg: setattr(self, "speed_scaling", float(msg.data) / 100.0), 10)
 
     def wait_for_server(self, timeout_sec: float = 10.0) -> bool:
         """Wait for the action server to become available."""
@@ -118,9 +130,13 @@ class TrajectoryClient:
         final = message.points[-1].time_from_start
         planned_sec = final.sec + final.nanosec / 1e9
         result_future = handle.get_result_async()
-        deadline = time.time() + planned_sec + settle_sec + 10.0
-        while not result_future.done() and time.time() < deadline and rclpy.ok():
+        budget_sec = planned_sec + settle_sec + 10.0
+        progress_sec, last = 0.0, time.monotonic()
+        while not result_future.done() and progress_sec < budget_sec and rclpy.ok():
             time.sleep(0.05)
+            now = time.monotonic()
+            progress_sec += (now - last) * max(self.speed_scaling, MIN_PROGRESS_RATE)
+            last = now
             if on_tick is not None:
                 on_tick()
 
@@ -128,7 +144,8 @@ class TrajectoryClient:
         if not result_future.done():
             # An abandoned goal keeps driving the arm while the caller reads its pose and moves on.
             self._cancel(handle)
-            return False, f"Trajectory execution timed out after {planned_sec:.1f} s of motion", elapsed_ms
+            return False, (f"Trajectory execution timed out after {planned_sec:.1f} s of motion "
+                           f"(speed scaling {self.speed_scaling:.0%})"), elapsed_ms
 
         result = result_future.result()
         if not result:

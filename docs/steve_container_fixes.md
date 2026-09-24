@@ -280,12 +280,10 @@ pip install --no-cache-dir --force-reinstall \
   `inconsistent name: filename has 'sam2', but metadata has 'sam-2'`. Use the bare git URL.
 - `pip install --user` writes to `/home/djyjyh/.local`, which is bind-mounted from the host.
   Breakage there follows you across container rebuilds.
-- `inspect.launch.py` does not forward `segmenter` or `scan_views` to the node, so those stay at
-  their node defaults (`sam`, 8). To override, run the node directly:
+- `inspect.launch.py` forwards `segmenter` and `scan_views`:
 
 ```bash
-ros2 run nbv_planner_ros inspection_node --ros-args \
-  -p mode:=scan -p segmenter:=depth -p object_name:=mustard_bottle
+ros2 launch nbv_planner_ros inspect.launch.py mode:=scan segmenter:=depth
 ```
 
 ### numpy

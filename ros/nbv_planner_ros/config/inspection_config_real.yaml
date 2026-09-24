@@ -12,13 +12,31 @@ inspection:
   start_look_at_base: [0.0, -0.60, 0.80]
 
   # -- Camera ------------------------------------------------------------------
-  # The calibrated D415 is published as a static TF, not a URDF link, so cuRobo cannot see it.
-  # handeye_file makes RosRobot add it as a real link on camera_mount_link before planning.
-  # Expects handeye_solve.py's format: translation_m and quaternion_xyzw, camera pose in the
-  # mount link's frame. Drop handeye_file and the URDF is left alone.
+  # The calibrated D415 is not in the robot's URDF. handeye_file makes RosRobot add it as a link
+  # on camera_mount_link for cuRobo and publish the same transform on TF, so nothing else needs to
+  # publish it. Expects handeye_solve.py's format: translation_m and quaternion_xyzw, camera pose
+  # in the mount link's frame. Copy it from the robot repo's nbv_scratch/ to this path.
   handeye_file: "/home/ws/nbv_scratch/handeye_result.json"
   camera_mount_link: "ur5etool0"
   camera_optical_frame: "nbv_camera_optical_frame"
+
+  # The packaged config names its camera dummy_camera_link and aliases it to camera_link. On the
+  # real URDF camera_link is the PAN-TILT camera, so without this the camera spheres would sit on
+  # the wrong camera and the wrist D415 would be invisible to collision checking.
+  link_aliases:
+    dummy_camera_link: "nbv_camera_optical_frame"
+  # D415 body, 99 x 23 x 20 mm, in the optical frame (+z forward, +x along the baseline, +y down).
+  # The colour sensor is off the body centre and which side is unverified, so the row spans
+  # +-0.1 m in x. The last sphere covers the bracket back to ur5etool0, which sits near
+  # (0.035, 0, -0.066) here. Check them in Rerun on the first dry run: world/planned/collision_spheres.
+  collision_sphere_overrides:
+    dummy_camera_link:
+      - {center: [-0.070, 0.0, -0.012], radius: 0.030}
+      - {center: [-0.035, 0.0, -0.012], radius: 0.030}
+      - {center: [0.000, 0.0, -0.012], radius: 0.030}
+      - {center: [0.035, 0.0, -0.012], radius: 0.030}
+      - {center: [0.070, 0.0, -0.012], radius: 0.030}
+      - {center: [0.035, 0.0, -0.045], radius: 0.030}
 
   color_topic: "/d415_calib/d415_calib/color/image_raw"
   depth_topic: "/d415_calib/d415_calib/aligned_depth_to_color/image_raw"
@@ -39,6 +57,9 @@ inspection:
   # program is running on the pendant.
   controller_action: "/scaled_joint_trajectory_controller/follow_joint_trajectory"
   joint_states_topic: "/joint_states"
+  # Pendant speed slider, in percent. Execution timeouts stretch with it instead of cancelling a
+  # slowed-down move halfway.
+  speed_scaling_topic: "/speed_scaling_state_broadcaster/speed_scaling"
 
   # -- Table ---------------------------------------------------------------------
   # MEASURE. Published as a static TF by the launch file, since nothing on the real robot
@@ -50,11 +71,14 @@ inspection:
 
   # -- Planning --------------------------------------------------------------------
   max_reach: 0.85
-  speed_scale: 0.25   # slower than sim: real hardware, and the plan is not reversible
+  # Uniform slow-down of every planned trajectory. 0.1 turns a 100 degree start pose move into about
+  # 6 s. The dry run prints the resulting peak joint speed; raise this once the first runs look right.
+  speed_scale: 0.1
   waypoint_dt: 0.08
   settle_time_sec: 0.5
   frame_timeout: 30.0
 
-  # No gripper is fitted, so the packaged Robotiq spheres drop out on their own. The cabinet
-  # refit still applies: the arm is mounted on the same MPO-700 cabinet.
+  # No gripper is fitted, so the packaged Robotiq spheres drop out on their own. The cabinet refit
+  # needs the cabinet mesh, which the real URDF takes from package://steve_simulation. That package
+  # is not in this container, so the refit is skipped and the packaged cabinet spheres are used.
   refit_collision_links: ["cabinet_link"]

@@ -6,8 +6,9 @@ import numpy as np
 import rclpy
 from rclpy.duration import Duration
 from scipy.spatial.transform import Rotation
+from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image, JointState
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
 
 from nbv_planner.camera import CameraIntrinsics
 from nbv_planner.config import ROBOT_CONFIG_PATH
@@ -21,10 +22,13 @@ from nbv_planner_ros.robot_model import (
     adapt_robot_config,
     camera_link_from_handeye,
     camera_pose_errors,
+    load_handeye,
     load_packaged_config,
+    motion_preview,
     wait_for_robot_description,
     write_urdf,
 )
+from nbv_planner_ros.targets import DryRunStop
 from nbv_planner_ros.trajectory_client import TrajectoryClient
 
 ENCODING_DTYPES = {"32FC1": np.float32, "16UC1": np.uint16, "rgb8": np.uint8, "bgr8": np.uint8}
@@ -66,12 +70,17 @@ class RosRobot:
                 self.config["camera_mount_link"], self.camera_frame)
             node.get_logger().info(
                 f"Injected {self.camera_frame} on {self.config['camera_mount_link']} from {handeye}")
+            # The same transform goes on TF, so every pose lookup of the camera and the planner's
+            # forward kinematics are built from one calibration file and cannot disagree.
+            self._camera_tf = self._broadcast_handeye(handeye)
         urdf_xml = self.urdf_xml
         self.urdf_path = write_urdf(urdf_xml)
         self.robot_config, self.base_link, self.arm_joint_names, dropped, refitted = adapt_robot_config(
             load_packaged_config(ROBOT_CONFIG_PATH), urdf_xml, self.camera_frame,
             refit_links=self.config.get("refit_collision_links", REFIT_COLLISION_LINKS),
             refit_max_radius=float(self.config.get("refit_sphere_max_radius", REFIT_SPHERE_MAX_RADIUS_M)),
+            link_aliases=self.config.get("link_aliases"),
+            sphere_overrides=self.config.get("collision_sphere_overrides"),
         )
         self.ee_link = self.camera_frame
         set_robot_model(self.urdf_path, self.robot_config)
@@ -98,7 +107,24 @@ class RosRobot:
             node,
             action_name=config.get("controller_action", "/joint_trajectory_controller/follow_joint_trajectory"),
             joint_names=tuple(self.arm_joint_names),
+            speed_scaling_topic=config.get("speed_scaling_topic"),
         )
+
+    def _broadcast_handeye(self, handeye_path: str) -> StaticTransformBroadcaster:
+        translation, quaternion = load_handeye(handeye_path)
+        message = TransformStamped()
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.header.frame_id = self.config["camera_mount_link"]
+        message.child_frame_id = self.camera_frame
+        message.transform.translation.x, message.transform.translation.y, message.transform.translation.z = (
+            float(v) for v in translation)
+        (message.transform.rotation.x, message.transform.rotation.y,
+         message.transform.rotation.z, message.transform.rotation.w) = (float(v) for v in quaternion)
+        broadcaster = StaticTransformBroadcaster(self.node)
+        broadcaster.sendTransform(message)
+        self.node.get_logger().info(
+            f"Publishing {message.header.frame_id} -> {self.camera_frame} on TF from {handeye_path}")
+        return broadcaster
 
     def wait_for_inputs(self, timeout_sec: float = 30.0) -> None:
         """Block until joint states, camera info and a depth frame have arrived."""
@@ -243,6 +269,18 @@ class RosRobot:
         dt = last_plan_interpolation_dt()
         if dt is None:
             raise RuntimeError("No planned sample interval; execute_trajectory follows a cuRobo plan")
+        if self.config.get("dry_run"):
+            if visualizer is not None:
+                self._show_planned_motion(trajectory, visualizer)
+            scale = float(self.config.get("speed_scale", 0.5))
+            path = np.asarray(trajectory)
+            seconds = (len(path) - 1) * dt / scale
+            travel = np.abs(path[-1] - self.current_arm_joints())
+            peak = np.abs(np.diff(path, axis=0)).max() / (dt / scale)
+            raise DryRunStop(
+                f"planned {len(path)} waypoints, {seconds:.1f} s at speed_scale {scale}, largest joint "
+                f"travel {np.degrees(travel.max()):.0f} deg, peak joint speed {np.degrees(peak):.0f} deg/s. "
+                f"Goal joints (deg): {np.round(np.degrees(path[-1]), 1).tolist()}")
         ok, message, _ = self.trajectory_client.execute(
             trajectory,
             dt=dt,
@@ -255,6 +293,13 @@ class RosRobot:
         if visualizer is not None:
             visualizer.update_robot_pose(self)
         return self.camera_world_transform()[:3, 3], (time.perf_counter() - started) * 1000.0
+
+    def _show_planned_motion(self, trajectory, visualizer) -> None:
+        path, centers, radii = motion_preview(self.urdf_path, self.robot_config, self.base_link,
+                                              self.camera_frame, self.arm_joint_names, trajectory)
+        base = self.transform(self.world_frame, self.base_link)
+        to_world = lambda points: points @ base[:3, :3].T + base[:3, 3]
+        visualizer.log_planned_motion(to_world(path), to_world(centers), radii)
 
     @property
     def viewer_urdf_path(self) -> str:

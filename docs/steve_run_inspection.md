@@ -124,19 +124,18 @@ and stops if they disagree by more than 15 mm of centre error or 10 mm at the
 | `segmenter` | `sam` | `sam` or `depth`, scan and both only |
 | `object_name` | `mustard_bottle` | must match what terminal 2 spawned |
 | `viz` | true | Rerun viewer |
-| `config_file` | packaged YAML | must exist, and must carry the start pose keys |
+| `config_file` | the target's packaged YAML | must exist, and must carry the start pose keys |
+| `target` | `sim` | `sim` or `real`, see `steve_run_real_robot.md` |
+| `confirm` | empty | `go` moves the real arm; ignored in sim |
 
-### Why ros2 run rather than ros2 launch
+### ros2 launch or ros2 run
 
-`inspect.launch.py` forwards only `config_file`, `object_name`, `mode`, `viz`,
-`max_views`, `target_coverage` and `use_sim_time`. It does not forward
-`scan_views` or `segmenter`, so scan mode tuning needs `ros2 run`.
-
-The launch file does set `NBV_YCB_ROOT` for you, which is why `ros2 run` needs
-the explicit export:
+`inspect.launch.py` forwards every parameter above and sets `NBV_YCB_ROOT`, which
+is why `ros2 run` needs the explicit export. The node picks sim time for
+`target:=sim` and wall time for `target:=real` itself.
 
 ```bash
-ros2 launch nbv_planner_ros inspect.launch.py mode:=cad max_views:=2 viz:=false
+ros2 launch nbv_planner_ros inspect.launch.py mode:=scan segmenter:=depth max_views:=2 viz:=false
 ```
 
 ---
@@ -242,10 +241,11 @@ Outputs land in `captures/`:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest \
-  /home/ws/src/parallel_robotics_lab/ros/nbv_start_pose_test/test -q
+  /home/ws/src/parallel_robotics_lab/ros/nbv_start_pose_test/test \
+  /home/ws/src/parallel_robotics_lab/ros/nbv_planner_ros/test -q
 ```
 
-Expect 7 passed, 1 skipped. Set `NBV_TEST_LIVE=1` to include the read only live
+Expect 13 passed, 1 skipped. Set `NBV_TEST_LIVE=1` to include the read only live
 URDF and Rerun test, which opens no GUI and sends no controller goals.
 
 ---

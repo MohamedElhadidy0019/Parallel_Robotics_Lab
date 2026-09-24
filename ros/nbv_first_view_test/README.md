@@ -20,11 +20,13 @@ ros2 launch nbv_first_view_test first_view.launch.py target:=sim
 
 ## Real robot
 
-Needs the hardware bringup, an External Control program running on the pendant,
-`steve_env.sh` sourced, the D415 node, and `publish_camera_extrinsic.sh`. The
-launch file publishes `table_frame` itself, since nothing on the real robot does.
+Full procedure, network setup and failures: `docs/steve_run_real_robot.md`. Needs
+the hardware bringup, an External Control program running on the pendant,
+`steve_real_env.sh` sourced, and the D415 node. The launch file publishes
+`table_frame` itself, since nothing on the real robot does.
 
 ```bash
+ros2 launch nbv_first_view_test first_view.launch.py target:=real            # dry run
 ros2 launch nbv_first_view_test first_view.launch.py target:=real confirm:=go
 ```
 
@@ -36,16 +38,21 @@ a mismatch, so a wrong `target` stops before anything is built.
 
 `target:=real` also:
 
-- leaves `use_sim_time` false, since only Gazebo publishes `/clock`
+- uses wall time, since only Gazebo publishes `/clock`
 - loads `inspection_config_real.yaml`
 - requires `robot_mode` 7 (RUNNING) and `safety_mode` 1 (NORMAL), read with
   Transient Local QoS because both are latched and a Volatile subscription
   receives nothing at all, which would read as a powered-down arm
-- requires `confirm:=go`
+- requires `scaled_joint_trajectory_controller` to be active
+- without `confirm:=go`, plans the start pose, draws the plan and the collision
+  spheres in Rerun, prints its peak joint speed, and stops before sending it
 - injects the calibrated camera into the URDF handed to cuRobo, from
-  `handeye_file` in the config. cuRobo reads kinematics from the URDF alone, so
-  a camera published only as a static TF is invisible to it. The robot's own
-  URDF is not touched.
+  `handeye_file` in the config, and publishes the same transform on TF. cuRobo
+  reads kinematics from the URDF alone, so a camera published only as a static
+  TF is invisible to it. The robot's own URDF is not touched.
+
+The safety gate lives in `nbv_planner_ros.targets` and is shared with the
+inspection node.
 
 Build:
 

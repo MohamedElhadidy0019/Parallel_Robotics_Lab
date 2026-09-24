@@ -105,18 +105,18 @@ def inject_camera_link(urdf_xml: str, parent: str, child: str, translation, quat
     return ET.tostring(root, encoding="unicode")
 
 
-def camera_link_from_handeye(urdf_xml: str, handeye_path: str, parent: str, child: str) -> str:
-    """Inject the camera described by a hand-eye calibration JSON.
-
-    Expects the format handeye_solve.py writes: translation_m and quaternion_xyzw, giving the
-    camera's pose expressed in the mount link's frame.
-    """
+def load_handeye(handeye_path: str) -> tuple[list[float], list[float]]:
+    """Translation and xyzw quaternion of the camera in its mount link, as handeye_solve.py writes them."""
     import json
 
     with open(handeye_path) as stream:
         result = json.load(stream)
-    return inject_camera_link(urdf_xml, parent, child,
-                              result["translation_m"], result["quaternion_xyzw"])
+    return result["translation_m"], result["quaternion_xyzw"]
+
+
+def camera_link_from_handeye(urdf_xml: str, handeye_path: str, parent: str, child: str) -> str:
+    """Inject the camera described by a hand-eye calibration JSON."""
+    return inject_camera_link(urdf_xml, parent, child, *load_handeye(handeye_path))
 
 
 def write_urdf(urdf_xml: str, directory: str | None = None) -> str:
@@ -255,9 +255,12 @@ def refit_collision_spheres(spheres: dict, urdf_xml: str, link_names, max_radius
 def adapt_robot_config(config: dict, urdf_xml: str, ee_link: str,
                        link_aliases: dict | None = None,
                        refit_links: Sequence[str] = REFIT_COLLISION_LINKS,
-                       refit_max_radius: float = REFIT_SPHERE_MAX_RADIUS_M
+                       refit_max_radius: float = REFIT_SPHERE_MAX_RADIUS_M,
+                       sphere_overrides: dict | None = None,
                        ) -> tuple[dict, str, list[str], list[str], list[str]]:
     """Rename the packaged cuRobo config onto the live robot and point it at the real camera frame.
+
+    sphere_overrides replaces the packaged spheres of a link, keyed by its packaged name.
 
     Returns (config, base link, arm joint names, collision links the live robot does not have,
     links whose spheres were refitted to the live geometry).
@@ -280,7 +283,8 @@ def adapt_robot_config(config: dict, urdf_xml: str, ee_link: str,
     # Every joint the arm does not drive stays put, or cuRobo would plan the gripper and the wheels too.
     kinematics["lock_joints"] = {name: 0.0 for name in movable_joints(urdf_xml) if name not in arm_joints}
 
-    spheres, merged, dropped = kinematics.get("collision_spheres") or {}, {}, []
+    spheres = {**(kinematics.get("collision_spheres") or {}), **(sphere_overrides or {})}
+    merged, dropped = {}, []
     for name, value in spheres.items():
         target = live_link(name)
         if target in links:
@@ -325,14 +329,11 @@ def load_packaged_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def camera_pose_errors(urdf_path: str, robot_config: dict, base_link: str, ee_link: str,
-                       joint_names: list[str], joint_values: np.ndarray,
-                       t_camera_base: np.ndarray, q_camera_base_xyzw: np.ndarray) -> tuple[float, float]:
-    """(position error m, rotation error rad) between cuRobo forward kinematics and the live TF camera pose."""
+def fk_model(urdf_path: str, robot_config: dict, base_link: str, ee_link: str):
+    """cuRobo forward kinematics for the adapted robot, reporting ee_link by name."""
     from curobo.cuda_robot_model.cuda_robot_model import CudaRobotModel
     from curobo.types.base import TensorDeviceType
     from curobo.types.robot import RobotConfig
-    from scipy.spatial.transform import Rotation
 
     tensor_args = TensorDeviceType()
     config = dict(robot_config)
@@ -343,8 +344,33 @@ def camera_pose_errors(urdf_path: str, robot_config: dict, base_link: str, ee_li
 
     # Ask for the camera link by name: the end effector pose cuRobo reports is not this frame.
     config["robot_cfg"]["kinematics"]["link_names"] = [ee_link]
+    return CudaRobotModel(RobotConfig.from_dict(config, tensor_args=tensor_args).kinematics), tensor_args
 
-    model = CudaRobotModel(RobotConfig.from_dict(config, tensor_args=tensor_args).kinematics)
+
+def motion_preview(urdf_path: str, robot_config: dict, base_link: str, ee_link: str,
+                   joint_names: list[str], trajectory: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Camera positions along a joint path, and the collision spheres at its last sample, in the base frame.
+
+    Returns (path (N, 3), sphere centres (M, 3), sphere radii (M,)). These are the spheres the
+    planner avoids obstacles with, so drawing them is how to check the camera is modelled.
+    """
+    model, tensor_args = fk_model(urdf_path, robot_config, base_link, ee_link)
+    order = [list(joint_names).index(name) for name in model.joint_names]
+    values = np.ascontiguousarray(np.asarray(trajectory, dtype=np.float32)[:, order])
+    state = model.get_state(tensor_args.to_device(values))
+    path = state.links_position.cpu().numpy()[:, model.link_names.index(ee_link)]
+    spheres = state.link_spheres_tensor.cpu().numpy()[-1]
+    spheres = spheres[spheres[:, 3] > 0]
+    return path, spheres[:, :3], spheres[:, 3]
+
+
+def camera_pose_errors(urdf_path: str, robot_config: dict, base_link: str, ee_link: str,
+                       joint_names: list[str], joint_values: np.ndarray,
+                       t_camera_base: np.ndarray, q_camera_base_xyzw: np.ndarray) -> tuple[float, float]:
+    """(position error m, rotation error rad) between cuRobo forward kinematics and the live TF camera pose."""
+    from scipy.spatial.transform import Rotation
+
+    model, tensor_args = fk_model(urdf_path, robot_config, base_link, ee_link)
     order = [list(joint_names).index(name) for name in model.joint_names]
     values = np.asarray(joint_values, dtype=np.float32)[order]
     state = model.get_state(tensor_args.to_device(values[None, :]))

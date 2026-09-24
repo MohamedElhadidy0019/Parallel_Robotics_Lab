@@ -12,29 +12,23 @@ import traceback
 import numpy as np
 import rclpy
 import yaml
-from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 
 # Stage 1 of the pipeline, imported rather than reimplemented. A copy here would pass while the
 # path the inspection node actually takes was broken, which is the failure this package exists
 # to catch.
 from nbv_planner.pipeline import _reach_start_pose
 from nbv_planner.viz import NBVVisualizer
-from nbv_planner_ros.robot_model import detect_joint_prefix, urdf_names, wait_for_robot_description
 from nbv_planner_ros.ros_robot import RosRobot
-
-CONFIG_DIR = os.path.join(get_package_share_directory("nbv_planner_ros"), "config")
-CONFIG_FOR_TARGET = {
-    "sim": os.path.join(CONFIG_DIR, "inspection_config.yaml"),
-    "real": os.path.join(CONFIG_DIR, "inspection_config_real.yaml"),
-}
-
-# Prefix the live URDF uses, per target. "ur5" is Gazebo and the RViz mock, both harmless to
-# drive. "ur5e" is the physical arm. Declaring one and finding the other means the graph is not
-# what the operator thinks it is, which is the moment to stop rather than to guess.
-PREFIX_FOR_TARGET = {"sim": "ur5", "real": "ur5e"}
+from nbv_planner_ros.targets import (
+    CONFIG_FOR_TARGET,
+    DryRunStop,
+    apply_clock,
+    check_target_matches_graph,
+    prepare_real_motion,
+    validate_target,
+)
 
 MAX_FK_POSITION_ERROR_M = 0.01
 MAX_FK_ROTATION_ERROR_RAD = 0.05
@@ -72,19 +66,6 @@ def send_blueprint() -> None:
     ))
 
 
-def latched(depth: int = 1):
-    """QoS the UR status topics publish with.
-
-    robot_mode and safety_mode are latched. A default Volatile subscription receives nothing at
-    all and reads identically to a robot that is powered down, which would turn a missing
-    subscription into a false all-clear.
-    """
-    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-
-    return QoSProfile(depth=depth, durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                      reliability=ReliabilityPolicy.RELIABLE)
-
-
 def log_depth(observation) -> None:
     """Depth beside the RGB, in metres, sharing the start pose pinhole."""
     import rerun as rr
@@ -102,17 +83,8 @@ class FirstViewNode(Node):
         self.declare_parameter("keep_alive", True)
         self.declare_parameter("confirm", "")
 
-        self.target = self.param("target")
-        if self.target not in CONFIG_FOR_TARGET:
-            raise RuntimeError(f"target must be one of {sorted(CONFIG_FOR_TARGET)}, got {self.target!r}")
-
-        # Only the simulator publishes /clock. rclpy's TimeSource declares use_sim_time False
-        # before this constructor runs, so nothing sets it for us, and leaving it False in Gazebo
-        # stamps every controller goal in wall time and schedules it decades out. Setting it here
-        # re-runs TimeSource's parameter callback, which swaps the clock. On the real robot there
-        # is no /clock, so wall time is correct and it stays False.
-        if self.target == "sim" and not self.get_parameter("use_sim_time").value:
-            self.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
+        self.target = validate_target(self.param("target"))
+        apply_clock(self, self.target)
 
         self.failed = False
         self.done = threading.Event()
@@ -135,56 +107,6 @@ class FirstViewNode(Node):
         config["object_name"] = self.param("object_name")
         self.get_logger().info(f"Target: {self.target} | config: {path}")
         return config
-
-    def check_target_matches_graph(self) -> None:
-        """Refuse to run when the declared target is not the robot on the graph.
-
-        The target is declared rather than detected because detection failing towards "sim" only
-        wastes a run, while detection failing towards "real" would drive physical hardware with
-        the safety gate skipped. Declaring it and then checking the declaration keeps the intent
-        explicit and still catches the mistake.
-
-        Runs before anything is built, so a wrong target fails on the mismatch rather than on
-        whatever the wrong config happens to reference first.
-        """
-        expected = PREFIX_FOR_TARGET[self.target]
-        actual = detect_joint_prefix(urdf_names(wait_for_robot_description(self))[1])
-        if actual != expected:
-            other = next((t for t, p in PREFIX_FOR_TARGET.items() if p == actual), None)
-            raise RuntimeError(
-                f"target:={self.target} expects joints prefixed {expected!r} but the live robot "
-                f"publishes {actual!r}." + (f" This looks like target:={other}." if other else ""))
-        self.get_logger().info(f"Graph matches target {self.target}: joint prefix {actual!r}")
-
-    def check_safety(self) -> None:
-        """Hold until the arm reports it is powered, clear and commandable."""
-        import time
-
-        from ur_dashboard_msgs.msg import RobotMode, SafetyMode
-
-        state = {}
-        self.create_subscription(RobotMode, "/io_and_status_controller/robot_mode",
-                                 lambda m: state.__setitem__("mode", m.mode), latched())
-        self.create_subscription(SafetyMode, "/io_and_status_controller/safety_mode",
-                                 lambda m: state.__setitem__("safety", m.mode), latched())
-        deadline = time.monotonic() + 15.0
-        while time.monotonic() < deadline and len(state) < 2:
-            time.sleep(0.1)
-        missing = [k for k in ("mode", "safety") if k not in state]
-        if missing:
-            raise RuntimeError(
-                f"No {missing} from /io_and_status_controller after 15 s. Is the arm bringup "
-                f"running and ROS_DOMAIN_ID correct? Silence here is not an all-clear.")
-        if state["mode"] != RobotMode.RUNNING:
-            raise RuntimeError(f"robot_mode is {state['mode']}, need {RobotMode.RUNNING} (RUNNING). "
-                               f"Power the arm and clear the safety chain.")
-        if state["safety"] != SafetyMode.NORMAL:
-            raise RuntimeError(f"safety_mode is {state['safety']}, need {SafetyMode.NORMAL} (NORMAL).")
-        if self.param("confirm") != "go":
-            raise RuntimeError(
-                "This will move the real arm. Re-run with confirm:=go once the cell is clear and "
-                "an External Control program is running on the pendant.")
-        self.get_logger().warning("Safety checks passed and confirmed; the real arm will move")
 
     def verify_kinematics(self, robot) -> None:
         """Compare cuRobo forward kinematics against TF, once the arm has stopped moving.
@@ -219,6 +141,8 @@ class FirstViewNode(Node):
     def run(self) -> None:
         try:
             self.run_once()
+        except DryRunStop as plan:
+            print(f"DRY RUN OK, the arm did not move: {plan}", flush=True)
         except Exception:
             self.failed = True
             self.get_logger().error(traceback.format_exc())
@@ -227,9 +151,9 @@ class FirstViewNode(Node):
 
     def run_once(self) -> None:
         self.get_logger().info("Checking the live robot description...")
-        self.check_target_matches_graph()
+        check_target_matches_graph(self, self.target)
         if self.target == "real":
-            self.check_safety()
+            prepare_real_motion(self, self.cfg, self.param("confirm"))
         robot = RosRobot(self, self.cfg)
         robot.wait_for_inputs()
         self.verify_kinematics(robot)

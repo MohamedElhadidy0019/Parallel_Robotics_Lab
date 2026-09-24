@@ -32,7 +32,8 @@ from nbv_planner.config import (
 )
 from nbv_planner.camera import backproject_depth, transform_points
 from nbv_planner.coverage import CoverageTracker, build_coverage_colored_mesh, sample_surface_points_and_normals
-from nbv_planner.motion_planning import build_world_config, move_camera, plan_motion_batch, robot_spheres_world
+from nbv_planner.motion_planning import (build_world_config, move_camera, plan_motion_batch, robot_spheres_world,
+                                         start_state_problem)
 from nbv_planner.object_estimate import mesh_alignment
 from nbv_planner.object_scan import box_world_config, scan_object
 from nbv_planner.ray_scoring import score_candidate_views
@@ -88,6 +89,14 @@ def _reach_start_pose(
         q_obj_world_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
         obj_dims=np.full(3, 2.0 * START_SAFETY_RADIUS_M),
     )
+
+    problem = start_state_problem(robot.current_arm_joints(), robot.arm_joint_names, world_cfg)
+    if problem is not None:
+        raise RuntimeError(
+            f"cuRobo will not plan from the arm's current pose: {problem}. The arm is inside the "
+            f"table box or the keep-clear box around the look-at point, or in self collision. "
+            f"Move it clear first (current joints, rad: "
+            f"{np.round(robot.current_arm_joints(), 3).tolist()}).")
 
     candidates = start_pose_candidates(
         start_position_base,

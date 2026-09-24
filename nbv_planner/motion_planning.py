@@ -218,6 +218,24 @@ def build_world_config(
 
 
 
+def start_state_problem(current_joints: np.ndarray, arm_joint_names: Sequence[str], world_config=None) -> str | None:
+    """Why cuRobo would refuse to plan from the current joints, or None when it would not.
+
+    A start state in collision fails every plan, so without this the start pose search burns
+    through all of its fallbacks and reports only that no path was found.
+    """
+    import torch
+    from curobo.types.robot import JointState
+
+    motion_gen = get_motion_gen(world_config=world_config)
+    state = JointState.from_position(
+        motion_gen.tensor_args.to_device(torch.as_tensor(np.asarray(current_joints, dtype=np.float32)[None, :])),
+        joint_names=list(arm_joint_names),
+    )
+    valid, status = motion_gen.check_start_state(state)
+    return None if valid else str(status)
+
+
 def plan_motion_batch(
     t_targets_world: np.ndarray,
     q_targets_world: np.ndarray,

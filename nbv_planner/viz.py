@@ -202,6 +202,14 @@ class NBVVisualizer:
         ]
         rr.log("benchmark", rr.TextDocument("\n".join(init_tree), media_type="text/markdown"))
 
+    def log_planned_motion(self, camera_path: np.ndarray, sphere_centers: np.ndarray, sphere_radii: np.ndarray) -> None:
+        """A plan that was not executed: the camera's path and the robot's collision spheres at its end."""
+        if not self.enabled:
+            return
+        rr.log("world/planned/camera_path", rr.LineStrips3D([camera_path.tolist()], colors=[[255, 170, 0]]))
+        rr.log("world/planned/collision_spheres",
+               rr.Points3D(sphere_centers.tolist(), radii=sphere_radii.tolist(), colors=[[255, 60, 60, 110]]))
+
     def update_robot_pose(self, robot) -> None:
         """Place the robot in the world and pose every joint the robot reports a value for."""
         if not self.enabled or self.urdf_tree is None:
